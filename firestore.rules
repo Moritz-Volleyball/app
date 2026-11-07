@@ -1,0 +1,83 @@
+rules_version = '2';
+// Sicherheitsregeln: in der Firebase-Konsole unter Firestore → Regeln komplett einfügen → Veröffentlichen.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function meDoc() { return get(/databases/$(database)/documents/members/$(request.auth.uid)); }
+    function hasMe() { return signedIn() && exists(/databases/$(database)/documents/members/$(request.auth.uid)); }
+    function isMember() { return hasMe() && meDoc().data.status == 'active'; }
+    function isTrainer() { return isMember() && meDoc().data.role == 'trainer'; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    // Nur der eigene Eintrag in einem Feld wie rsvp/rides/votes darf geändert werden
+    function onlyOwnEntry(field) {
+      return changed().hasOnly([field])
+        && request.resource.data.get(field, {}).diff(resource.data.get(field, {})).affectedKeys().hasOnly([request.auth.uid]);
+    }
+
+    match /members/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isMember();
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'lang', 'role', 'status', 'joined'])
+        && request.resource.data.role == 'member' && request.resource.data.status == 'pending'
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40;
+      allow update: if isTrainer()
+        || (signedIn() && request.auth.uid == uid && changed().hasOnly(['name', 'lang']) && request.resource.data.name.size() <= 40);
+      allow delete: if isTrainer();
+    }
+
+    match /events/{id} {
+      allow read: if isMember();
+      allow create, delete: if isTrainer();
+      allow update: if isTrainer()
+        || (isMember() && !resource.data.get('cancelled', false) && (onlyOwnEntry('rsvp') || onlyOwnEntry('rides')));
+    }
+
+    match /posts/{id} {
+      allow read: if isMember();
+      allow create: if isTrainer()
+        || (isMember() && request.resource.data.author == request.auth.uid
+            && request.resource.data.type == 'msg' && request.resource.data.pinned == false
+            && request.resource.data.text.size() <= 2000);
+      allow update: if isTrainer();
+      allow delete: if isTrainer() || (isMember() && resource.data.author == request.auth.uid);
+    }
+
+    match /inbox/{id} {
+      allow create: if isMember() && request.resource.data.from == request.auth.uid;
+      allow read, delete: if isTrainer();
+    }
+
+    match /polls/{id} {
+      allow read: if isMember();
+      allow create, delete: if isTrainer();
+      allow update: if isTrainer() || (isMember() && resource.data.closed != true && onlyOwnEntry('votes'));
+    }
+
+    match /videos/{id} {
+      allow read: if isMember();
+      allow write: if isTrainer();
+    }
+
+    match /fees/{id} {
+      allow read: if isMember();
+      allow write: if isTrainer();
+    }
+
+    match /payments/{uid} {
+      allow read: if isTrainer() || (isMember() && request.auth.uid == uid);
+      allow write: if isTrainer();
+    }
+
+    // Push-Adressen der Geräte: nur schreiben, niemand liest (der Push-Dienst liest mit Admin-Rechten)
+    match /tokens/{uid} {
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Warteschlange für Push-Nachrichten (wird von der GitHub-Action verschickt und gelöscht)
+    match /outbox/{id} {
+      allow create: if signedIn() && request.resource.data.from == request.auth.uid
+        && (isMember() || (hasMe() && request.resource.data.to == 'trainers'));
+    }
+  }
+}
