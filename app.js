@@ -101,7 +101,14 @@
   }
   // Push: stored as key + parameters, the sender translates per recipient language
   async function push(to, k, p = {}, link = '') {
-    try { await DB.add('outbox', { to, k, p, link, from: uid(), ts: Date.now() }); } catch (e) { console.warn('push not queued', e); }
+    try { await DB.add('outbox', { to, k, p, link, from: uid(), ts: Date.now() }); kickPush(); } catch (e) { console.warn('push not queued', e); }
+  }
+  // Tell the push service (Cloudflare Worker) to send right away
+  let kickT = null;
+  function kickPush() {
+    if (!C.pushUrl || !DB || DB.demo) return;
+    clearTimeout(kickT);
+    kickT = setTimeout(() => { try { fetch(C.pushUrl, { method: 'POST', mode: 'no-cors', keepalive: true }).catch(() => { /* cron catches up */ }); } catch (e) { /* */ } }, 400);
   }
   const evP = (ev) => ({ title: ev.title, start: ev.start, place: ev.place || '' });
   async function notifyPromoted(before, after, ev) {
@@ -841,7 +848,7 @@
       toast(t('feef.created')); go('#/kasse');
     }
   };
-  async function notifyNew(name) { try { await DB.add('outbox', { to: 'trainers', k: 'signup', p: { name }, link: '#/mitglieder', from: uid(), ts: Date.now() }); } catch (e) { /* */ } }
+  async function notifyNew(name) { try { await DB.add('outbox', { to: 'trainers', k: 'signup', p: { name }, link: '#/mitglieder', from: uid(), ts: Date.now() }); kickPush(); } catch (e) { /* */ } }
 
   document.addEventListener('click', async (ev) => {
     const el = ev.target.closest('[data-a]'); if (!el) return;
