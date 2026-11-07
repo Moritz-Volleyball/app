@@ -1,0 +1,28 @@
+name: Push-Nachrichten
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+concurrency:
+  group: push
+  cancel-in-progress: false
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Abhaengigkeiten
+        working-directory: push
+        run: npm install --no-audit --no-fund --silent
+      - name: Senden
+        working-directory: push
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          APP_URL: ${{ vars.APP_URL }}
+          REMINDER_HOURS: ${{ vars.REMINDER_HOURS || '24' }}
+          TZ_NAME: Europe/Budapest
+        run: node send.mjs
