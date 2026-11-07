@@ -32,5 +32,8 @@ self.APP_CONFIG = {
   // Firebase-Konsole → Projekteinstellungen → Cloud Messaging → Web-Push-Zertifikate → Schlüsselpaar
   vapidKey: 'BImkc1FPD2Fi3ksUZKlmrU9qezQqCJemcXmVVhJkpO2NxOP_OtvbR0LFP-KCdQPoEp7l-yNE-_kHnfrkY1qnsMQ',
 
+  // Adresse des Push-Dienstes (Cloudflare Worker), z. B. 'https://volleyball-push.DEINNAME.workers.dev'
+  pushUrl: 'https://volleyball-push.smilehype130.workers.dev',
+
   // Video-Kategorien kommen automatisch aus der gewählten Sprache (i18n.js)
 };
