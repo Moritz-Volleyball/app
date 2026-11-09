@@ -12,7 +12,9 @@
     authSubs: [], dataSubs: [], dataKey: '',
     videoCat: '*', statRange: '90', showPast: false, loginTab: 'login',
     installEvt: null, pushDismissed: false, openFee: null, navCount: 0,
-    lang: null, langPicker: false
+    lang: null, langPicker: false,
+    comments: [], homework: [], feedback: [], cal: null, skills: {}, prefs: null, goals: null, theme: null,
+    calView: 'list', calMonth: null, calDay: null, openComments: new Set(), teamDraft: null, q: '', pendingRender: false
   };
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -71,6 +73,50 @@
   const toDateInput = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
   const toTimeInput = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const euro = (n) => F_.eur.format(n || 0);
+  const fnv = (str) => { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
+  const fbId = (evId) => evId + '_' + fnv(uid() + '|' + evId) + fnv(evId + '|' + uid());
+  const REACTIONS = ['👍', '❤️', '😂', '🔥', '🏐'];
+
+  // Seen timestamps (unread counters) – per device
+  let SEEN = null;
+  try { SEEN = JSON.parse(store.get('vb-seen') || 'null'); } catch (e) { SEEN = null; }
+  if (!SEEN || typeof SEEN !== 'object') SEEN = { news: Date.now(), videos: Date.now(), c: {}, start: Date.now() };
+  if (!SEEN.c) SEEN.c = {};
+  const saveSeen = () => store.set('vb-seen', JSON.stringify(SEEN));
+  saveSeen();
+  const PREV = { news: SEEN.news, videos: SEEN.videos };
+  function markSeen(key) { PREV[key] = SEEN[key]; SEEN[key] = Date.now(); saveSeen(); }
+  function markComments(target) { SEEN.c[target] = Date.now(); saveSeen(); }
+
+  // One-off document subscriptions (feedback, goals of others …)
+  const docCache = {}, docSubs = {};
+  function useDoc(path) {
+    if (!(path in docSubs)) { docCache[path] = undefined; docSubs[path] = DB.watchDoc(path, (d) => { docCache[path] = d; schedule(); }); }
+    return docCache[path];
+  }
+  const clearDocs = () => { Object.keys(docSubs).forEach((k) => { try { docSubs[k](); } catch (e) { /* */ } delete docSubs[k]; delete docCache[k]; }); };
+
+  // Team design (colours, logo, name)
+  const hexOk = (h) => /^#[0-9a-f]{6}$/i.test(h || '');
+  function mix(hex, other, w) {
+    const a = parseInt(hex.slice(1), 16), b = parseInt(other.slice(1), 16);
+    const ch = (x, sh) => (x >> sh) & 255;
+    const m = (sh) => Math.round(ch(a, sh) * (1 - w) + ch(b, sh) * w);
+    return '#' + [16, 8, 0].map((sh) => m(sh).toString(16).padStart(2, '0')).join('');
+  }
+  function applyTheme(th, preview) {
+    if (!preview) S.theme = th || null;
+    const r = document.documentElement.style;
+    if (th && hexOk(th.c1)) {
+      r.setProperty('--blue', th.c1); r.setProperty('--navy', mix(th.c1, '#000000', 0.35)); r.setProperty('--sky', mix(th.c1, '#ffffff', 0.88));
+      const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.setAttribute('content', mix(th.c1, '#000000', 0.35));
+    } else { ['--blue', '--navy', '--sky'].forEach((v) => r.removeProperty(v)); }
+    if (th && hexOk(th.c2)) r.setProperty('--accent', th.c2); else r.removeProperty('--accent');
+    if (!preview) { try { store.set('vb-theme', JSON.stringify(th || null)); } catch (e) { /* */ } }
+  }
+  try { applyTheme(JSON.parse(store.get('vb-theme') || 'null')); } catch (e) { /* */ }
+  const groupName = () => (S.theme && S.theme.name) || C.groupName || 'Volleyball';
+  const logoHtml = (cls) => (S.theme && S.theme.logo ? `<img class="${cls} img" src="${esc(S.theme.logo)}" alt="">` : `<div class="${cls}">🏐</div>`);
 
   function toast(msg, kind = '') {
     let box = $('#toasts');
@@ -81,16 +127,22 @@
   const errMsg = (e) => { const k = e && e.code ? 'err.' + e.code : ''; const v = k ? t(k) : ''; return v && v !== k ? v : ((e && e.message) || String(e)); };
 
   // ---------------------------------------------------------- Event logic
+  // Members with "yes" and guests share the spots in the order they signed up
+  function guestEntries(ev) {
+    return Object.entries(ev.guests || {}).flatMap(([host, arr]) => (Array.isArray(arr) ? arr : []).map((g, i) => ({ k: 'g:' + host + ':' + i, t: g.t || 0, m: false, name: g.n, trial: !!g.trial, host, i })));
+  }
   function rsvpLists(ev) {
     const r = ev.rsvp || {};
-    const yes = Object.entries(r).filter(([, v]) => v && v.s === 'yes').sort((a, b) => a[1].t - b[1].t).map(([k]) => k);
+    const entries = Object.entries(r).filter(([, v]) => v && v.s === 'yes').map(([k, v]) => ({ k, t: v.t || 0, m: true })).concat(guestEntries(ev)).sort((a, b) => a.t - b.t);
     const lim = Number(ev.limit) || 0;
-    const confirmed = lim > 0 ? yes.slice(0, lim) : yes;
-    const waitlist = lim > 0 ? yes.slice(lim) : [];
+    const inE = lim > 0 ? entries.slice(0, lim) : entries;
+    const waitE = lim > 0 ? entries.slice(lim) : [];
+    const confirmed = inE.filter((e) => e.m).map((e) => e.k);
+    const waitlist = waitE.filter((e) => e.m).map((e) => e.k);
     const no = Object.entries(r).filter(([, v]) => v && v.s === 'no').map(([k]) => k);
     const answered = new Set(Object.keys(r));
     const open = activeMembers().map((m) => m.id).filter((id) => !answered.has(id));
-    return { confirmed, waitlist, no, open, lim };
+    return { confirmed, waitlist, no, open, lim, guestsIn: inE.filter((e) => !e.m), guestsWait: waitE.filter((e) => !e.m), total: inE.length, waitTotal: waitE.length };
   }
   function myStatus(ev) {
     const l = rsvpLists(ev); const me = uid();
@@ -131,12 +183,12 @@
     const e = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
     return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//' + e(C.publisher) + '//Volleyball//EN', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
       'UID:' + ev.id + '@volleyball-app', 'DTSTAMP:' + f(Date.now()), 'DTSTART:' + f(ev.start), 'DTEND:' + f(ev.end || ev.start + 7200e3),
-      'SUMMARY:' + e(ev.title + ' – ' + (C.groupName || '')), 'LOCATION:' + e(ev.place), 'DESCRIPTION:' + e(ev.notes),
+      'SUMMARY:' + e(ev.title + ' – ' + groupName()), 'LOCATION:' + e(ev.place), 'DESCRIPTION:' + e(ev.notes),
       'BEGIN:VALARM', 'TRIGGER:-PT2H', 'ACTION:DISPLAY', 'DESCRIPTION:' + e(ev.title), 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
   }
   function gcalUrl(ev) {
     const f = (ts) => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-    const p = new URLSearchParams({ action: 'TEMPLATE', text: ev.title + ' – ' + (C.groupName || ''), dates: f(ev.start) + '/' + f(ev.end || ev.start + 7200e3), location: ev.place || '', details: ev.notes || '' });
+    const p = new URLSearchParams({ action: 'TEMPLATE', text: ev.title + ' – ' + groupName(), dates: f(ev.start) + '/' + f(ev.end || ev.start + 7200e3), location: ev.place || '', details: ev.notes || '' });
     return 'https://calendar.google.com/calendar/render?' + p.toString();
   }
   const ytId = (url) => { const m = String(url || '').match(/(?:youtu\.be\/|v=|\/shorts\/|\/embed\/|\/live\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : ''; };
@@ -149,12 +201,17 @@
     unsub(S.dataSubs); S.dataKey = key;
     const w = (n, k) => S.dataSubs.push(DB.watchCol(n, (d) => { S[k] = d; schedule(); }));
     w('members', 'members'); w('events', 'events'); w('posts', 'posts'); w('polls', 'polls'); w('videos', 'videos'); w('fees', 'fees');
-    if (isTrainer()) { w('payments', 'payments'); w('inbox', 'inbox'); }
-    else S.dataSubs.push(DB.watchDoc('payments/' + uid(), (d) => { S.myPay = d; schedule(); }));
+    w('comments', 'comments'); w('homework', 'homework');
+    const d = (path, fn) => S.dataSubs.push(DB.watchDoc(path, (x) => { fn(x); schedule(); }));
+    d('settings/cal', (x) => { S.cal = x; });
+    d('prefs/' + uid(), (x) => { S.prefs = x; });
+    d('goals/' + uid(), (x) => { S.goals = x; });
+    if (isTrainer()) { w('payments', 'payments'); w('inbox', 'inbox'); w('feedback', 'feedback'); d('private/skills', (x) => { S.skills = (x && x.s) || {}; }); }
+    else S.dataSubs.push(DB.watchDoc('payments/' + uid(), (x) => { S.myPay = x; schedule(); }));
   }
   function onAuth(u) {
-    unsub(S.authSubs); unsub(S.dataSubs); S.dataKey = '';
-    Object.assign(S, { user: u, me: undefined, members: [], events: [], posts: [], polls: [], videos: [], fees: [], payments: [], inbox: [], myPay: null });
+    unsub(S.authSubs); unsub(S.dataSubs); S.dataKey = ''; clearDocs();
+    Object.assign(S, { user: u, me: undefined, members: [], events: [], posts: [], polls: [], videos: [], fees: [], payments: [], inbox: [], myPay: null, comments: [], homework: [], feedback: [], cal: null, skills: {}, prefs: null, goals: null });
     if (u) {
       S.authSubs.push(DB.watchDoc('members/' + u.uid, (m) => {
         const prev = S.me;
@@ -172,9 +229,12 @@
   }
 
   // ---------------------------------------------------------- Rendering
-  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt']);
+  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt', 'gast', 'aufgabe-neu', 'design', 'push-prefs']);
   let lastKey = '', rq = false;
   const schedule = () => { if (rq) return; rq = true; requestAnimationFrame(() => { rq = false; render(false); }); };
+  // Don't redraw while someone is typing into an inline field (comment, goal, search)
+  const typing = () => { const a = document.activeElement; return !!(a && a.matches && a.matches('[data-keep]') && a.value); };
+  document.addEventListener('focusout', () => { if (S.pendingRender) { S.pendingRender = false; setTimeout(() => render(false), 50); } });
   function route() {
     const h = (location.hash || '#/termine').replace(/^#\/?/, '');
     const [r, ...rest] = h.split('/');
@@ -191,6 +251,7 @@
     const { r, id } = route();
     const key = S.lang + '|' + stage + '|' + r + '/' + id;
     if (!force && key === lastKey && (stage !== 'app' || FORM_ROUTES.has(r)) && document.querySelector('#app form[data-f]')) return;
+    if (!force && key === lastKey && typing()) { S.pendingRender = true; return; }
     const main = $('#main');
     const scroll = key === lastKey && main ? main.scrollTop : 0;
     if (stage === 'lang') app.innerHTML = viewLangPicker();
@@ -202,29 +263,31 @@
     else app.innerHTML = shell(r, id);
     const m2 = $('#main'); if (m2) m2.scrollTop = scroll;
     lastKey = key;
+    if (stage === 'app') afterRender(r, id);
   }
 
   const TABS = [
-    ['termine', '📅', 'tab.events', ['termine', 'termin', 'termin-neu', 'termin-edit', 'anwesenheit', 'fahrt']],
+    ['termine', '📅', 'tab.events', ['termine', 'termin', 'termin-neu', 'termin-edit', 'anwesenheit', 'fahrt', 'gast', 'teams']],
     ['news', '📣', 'tab.news', ['news', 'nachricht']],
     ['umfragen', '📊', 'tab.polls', ['umfragen', 'umfrage-neu']],
-    ['videos', '🎬', 'tab.videos', ['videos', 'video-neu', 'video-edit']],
-    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install']]
+    ['videos', '🎬', 'tab.videos', ['videos', 'video-neu', 'video-edit', 'aufgabe-neu']],
+    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install', 'kalender-abo', 'push-prefs', 'ziele', 'design', 'suche']]
   ];
   const VIEWS = {
     termine: viewTermine, termin: viewTermin, 'termin-neu': viewTerminForm, 'termin-edit': viewTerminForm, anwesenheit: viewAnwesenheit, fahrt: viewFahrt,
     news: viewNews, nachricht: viewNachricht, umfragen: viewUmfragen, 'umfrage-neu': viewUmfrageForm,
     videos: viewVideos, 'video-neu': viewVideoForm, 'video-edit': viewVideoForm,
-    mehr: viewMehr, kasse: viewKasse, 'beitrag-neu': viewBeitragForm, statistik: viewStatistik, mitglieder: viewMitglieder, postfach: viewPostfach, profil: viewProfil, install: viewInstall
+    mehr: viewMehr, kasse: viewKasse, 'beitrag-neu': viewBeitragForm, statistik: viewStatistik, mitglieder: viewMitglieder, postfach: viewPostfach, profil: viewProfil, install: viewInstall,
+    gast: viewGast, teams: viewTeams, 'aufgabe-neu': viewAufgabeForm, 'kalender-abo': viewKalenderAbo, 'push-prefs': viewPushPrefs, ziele: viewZiele, design: viewDesign, suche: viewSuche
   };
   const curFlag = () => (I.langs.find((l) => l.code === S.lang) || I.langs[0]).flag;
   function shell(r, id) {
     const v = (VIEWS[r] || viewTermine)(id);
-    const pending = isTrainer() ? S.members.filter((m) => m.status === 'pending').length + S.inbox.length : 0;
-    const nav = TABS.map(([k, ic, lb, group]) => `<a href="#/${k}" class="${group.includes(r) ? 'on' : ''}"><span class="ic">${ic}${k === 'mehr' && pending ? `<i class="dot">${pending}</i>` : ''}</span><span>${t(lb)}</span></a>`).join('');
+    const b = badges();
+    const nav = TABS.map(([k, ic, lb, group]) => `<a href="#/${k}" class="${group.includes(r) ? 'on' : ''}"><span class="ic">${ic}${b[k] ? `<i class="dot">${b[k] > 99 ? '99+' : b[k]}</i>` : ''}</span><span>${t(lb)}</span></a>`).join('');
     return `${DB.demo ? `<div class="demo-bar">${t('demo.bar', { name: S.me.name })}${isTrainer() ? ' (' + t('demo.trainer') + ')' : ''} · <button data-a="demo-switch">${t('demo.switch')}</button></div>` : ''}
-      <header class="top">${v.back ? `<button class="back" data-a="back" data-to="${esc(v.back)}" aria-label="${t('back')}">‹</button>` : '<div class="logo">🏐</div>'}
-        <h1>${esc(v.title)}</h1>${v.action || ''}<button class="langbtn" data-a="lang-open" aria-label="${t('lang.change')}">${curFlag()}</button></header>
+      <header class="top">${v.back ? `<button class="back" data-a="back" data-to="${esc(v.back)}" aria-label="${t('back')}">‹</button>` : logoHtml('logo')}
+        <h1>${esc(v.title)}</h1>${v.action || ''}${r !== 'suche' ? `<a class="langbtn" href="#/suche" aria-label="${t('search.title')}">🔍</a>` : ''}<button class="langbtn" data-a="lang-open" aria-label="${t('lang.change')}">${curFlag()}</button></header>
       <main id="main"><div class="wrap">${v.html}</div></main>
       <nav class="tabs">${nav}</nav>`;
   }
@@ -233,7 +296,7 @@
   function viewLangPicker() {
     // Title in all three languages, because the language is not chosen yet
     return `<div class="login lang-pick">
-      <div class="brand"><div class="ball">🏐</div><h2>${esc(C.groupName || 'Volleyball')}</h2></div>
+      <div class="brand">${logoHtml('ball')}<h2>${esc(groupName())}</h2></div>
       <div class="card"><h3 class="center-text">Choose your language<br><span class="muted small">Выберите язык · Sprache wählen</span></h3>
         ${I.langs.map((l) => `<button class="langopt ${l.code === S.lang ? 'on' : ''}" data-a="lang-set" data-l="${l.code}"><span class="flag">${l.flag}</span><span>${l.name}</span>${l.code === (C.defaultLang || 'en') ? '<span class="tag">Main</span>' : ''}</button>`).join('')}
       </div>
@@ -245,7 +308,7 @@
     return `<div class="center"><div class="ball spin">🏐</div><p class="muted">${S.error ? t(S.error) : t('loading')}</p>${S.error ? `<button class="btn" data-a="reload">${t('reload')}</button>` : ''}</div>`;
   }
   function brand() {
-    return `<div class="brand"><div class="ball">🏐</div><h2>${esc(C.groupName || 'Volleyball')}</h2><p class="muted">${t('publisher', { name: C.publisher || '' })}</p>
+    return `<div class="brand">${logoHtml('ball')}<h2>${esc(groupName())}</h2><p class="muted">${t('publisher', { name: C.publisher || '' })}</p>
       <button class="link sm" data-a="lang-open">${curFlag()} ${t('lang.change')}</button></div>`;
   }
   function viewLogin() {
@@ -292,21 +355,33 @@
   function rsvpButtons(ev, st, big) {
     return `<button class="btn ${big ? '' : 'sm'} ${st.k === 'yes' || st.k === 'wait' ? 'on-yes' : 'ghost'}" data-a="rsvp" data-id="${ev.id}" data-s="yes">${t('btn.yes')}</button><button class="btn ${big ? '' : 'sm'} ${st.k === 'no' ? 'on-no' : 'ghost'}" data-a="rsvp" data-id="${ev.id}" data-s="no">${t('btn.no')}</button>`;
   }
+  const commentsFor = (target) => S.comments.filter((c) => c.target === target);
+  const newComments = (target) => commentsFor(target).filter((c) => c.author !== uid() && c.ts > (SEEN.c[target] || SEEN.start)).length;
   function evCard(ev) {
     const l = rsvpLists(ev); const st = myStatus(ev); const past = (ev.end || ev.start) < Date.now();
-    const pills = [`<span class="pill ok">✅ ${l.confirmed.length}${l.lim ? '/' + l.lim : ''}</span>`];
-    if (l.waitlist.length) pills.push(`<span class="pill wait">${t('ev.waitN', { n: l.waitlist.length })}</span>`);
+    const pills = [`<span class="pill ok">✅ ${l.total}${l.lim ? '/' + l.lim : ''}</span>`];
+    if (l.waitTotal) pills.push(`<span class="pill wait">${t('ev.waitN', { n: l.waitTotal })}</span>`);
+    if (l.guestsIn.length) pills.push(`<span class="pill">${t('guest.pill', { n: l.guestsIn.length })}</span>`);
     if (ev.carpool) pills.push(`<span class="pill">${t('ev.carpool')}</span>`);
     if (ev.plan && ev.plan.length) pills.push(`<span class="pill">${t('ev.plan')}</span>`);
+    const nc = newComments('events/' + ev.id); const cc = commentsFor('events/' + ev.id).length;
+    if (cc) pills.push(`<span class="pill ${nc ? 'new' : ''}">💬 ${cc}${nc ? ' · ' + t('unread.new', { n: nc }) : ''}</span>`);
+    const minLow = isTrainer() && !past && !ev.cancelled && Number(ev.minPlayers) > 0 && l.total < Number(ev.minPlayers);
     return `<div class="card ev ${ev.cancelled ? 'cancelled' : ''} ${past ? 'past' : ''}">
       <a class="ev-top" href="#/termin/${ev.id}">
         <div class="ev-date"><b>${F_.shortDay.format(ev.start)}</b><span>${F_.dm.format(ev.start)}</span></div>
-        <div class="ev-body"><div class="ev-title">${esc(ev.title)}${ev.cancelled ? ` <span class="tag red">${t('ev.cancelledTag')}</span>` : ''}</div>
+        <div class="ev-body"><div class="ev-title">${esc(ev.title)}${ev.cancelled ? ` <span class="tag red">${t('ev.cancelledTag')}</span>` : ''}${minLow ? ` <span class="tag warnt">${t('min.lowTag')}</span>` : ''}</div>
           <div class="muted small">${timeRange(ev)}${ev.place ? ' · ' + esc(ev.place) : ''}</div>
           <div class="pills">${pills.join('')}</div></div>
         <div class="st st-${st.k}">${st.label}</div></a>
       ${!past && !ev.cancelled ? `<div class="ev-actions">${rsvpButtons(ev, st, false)}</div>` : ''}
     </div>`;
+  }
+  // Feedback: which past session still waits for my rating?
+  function feedbackDue() {
+    const now = Date.now();
+    return [...S.events].filter((e) => e.fb !== false && !e.cancelled && (e.end || e.start) < now && (e.end || e.start) > now - 4 * 864e5 && rsvpLists(e).confirmed.includes(uid()))
+      .sort((a, b) => b.start - a.start).find((e) => { const d = useDoc('feedback/' + fbId(e.id)); return d === null && !store.get('vb-fb-' + e.id); });
   }
   function viewTermine() {
     const now = Date.now();
@@ -314,16 +389,76 @@
     const up = sorted.filter((e) => (e.end || e.start) >= now);
     const past = sorted.filter((e) => (e.end || e.start) < now).reverse().slice(0, 12);
     const open = up.filter((e) => !e.cancelled && myStatus(e).k === 'open').length;
+    const fb = feedbackDue();
+    const seg = `<div class="seg"><button class="${S.calView === 'list' ? 'on' : ''}" data-a="cal-view" data-v="list">☰ ${t('cal.list')}</button><button class="${S.calView === 'month' ? 'on' : ''}" data-a="cal-view" data-v="month">🗓 ${t('cal.month')}</button></div>`;
+    const fbBanner = fb ? `<a class="banner fbb" href="#/termin/${fb.id}"><div><b>${t('fb.bannerT')}</b><br><span class="small">${esc(fb.title)} · ${esc(whenTxt(fb.start))}</span></div><span class="stars-mini">☆☆☆☆☆</span></a>` : '';
     return {
       title: t('ev.title'),
       action: isTrainer() ? `<a class="btn sm" href="#/termin-neu">${t('ev.add')}</a>` : '',
-      html: `${pushBanner()}
+      html: `${pushBanner()}${fbBanner}${seg}
         ${open ? `<div class="hint">${t('ev.openHint', { n: open })}</div>` : ''}
+        ${S.calView === 'month' ? monthView(sorted) : `
         ${up.length ? up.map(evCard).join('') : `<div class="empty">${t('ev.none')}${isTrainer() ? `<br><a class="btn" href="#/termin-neu">${t('ev.first')}</a>` : ''}</div>`}
-        ${past.length ? `<button class="link" data-a="toggle-past">${S.showPast ? t('ev.hidePast') : t('ev.showPast')}</button>${S.showPast ? past.map(evCard).join('') : ''}` : ''}`
+        ${past.length ? `<button class="link" data-a="toggle-past">${S.showPast ? t('ev.hidePast') : t('ev.showPast')}</button>${S.showPast ? past.map(evCard).join('') : ''}` : ''}`}`
     };
   }
+  function monthView(sorted) {
+    const base = S.calMonth ? new Date(S.calMonth) : new Date(); base.setDate(1); base.setHours(0, 0, 0, 0);
+    const y = base.getFullYear(), mo = base.getMonth();
+    const first = (base.getDay() + 6) % 7; // Monday first
+    const days = new Date(y, mo + 1, 0).getDate();
+    const key = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    const byDay = {}; sorted.forEach((e) => { const k = key(new Date(e.start)); (byDay[k] = byDay[k] || []).push(e); });
+    const todayK = key(new Date());
+    const wd = Array.from({ length: 7 }, (_, i) => F_.shortDay.format(new Date(2024, 0, 1 + i)));
+    let cells = '';
+    for (let i = 0; i < first; i++) cells += '<span class="cd empty"></span>';
+    for (let d = 1; d <= days; d++) {
+      const k = `${y}-${mo}-${d}`; const evs = byDay[k] || [];
+      const dots = evs.slice(0, 3).map((e) => { const st = myStatus(e).k; return `<i class="dt ${e.cancelled ? 'c' : st === 'yes' ? 'y' : st === 'no' ? 'n' : st === 'wait' ? 'w' : 'o'}"></i>`; }).join('');
+      cells += `<button class="cd ${k === todayK ? 'today' : ''} ${S.calDay === k ? 'sel' : ''} ${evs.length ? 'has' : ''}" data-a="cal-day" data-k="${k}"><span>${d}</span><span class="dots">${dots}</span></button>`;
+    }
+    const sel = S.calDay && byDay[S.calDay] ? byDay[S.calDay] : null;
+    return `<div class="card cal"><div class="cal-h"><button class="x" data-a="cal-move" data-d="-1" aria-label="‹">‹</button><b>${esc(F_.month.format(base))}</b><button class="x" data-a="cal-move" data-d="1" aria-label="›">›</button></div>
+      <div class="cal-g">${wd.map((w) => `<span class="cw">${esc(w)}</span>`).join('')}${cells}</div>
+      <div class="cal-legend small muted"><span><i class="dt y"></i>${t('st.yes')}</span><span><i class="dt o"></i>${t('st.open')}</span><span><i class="dt n"></i>${t('st.no')}</span><span><i class="dt c"></i>${t('cal.cancelled')}</span></div></div>
+      ${sel ? sel.map(evCard).join('') : `<p class="center-text small muted">${t('cal.tapDay')}</p>`}`;
+  }
   const chips = (ids, cls = '') => (ids.length ? ids.map((id) => `<span class="chip ${cls}">${esc(nameOf(id))}</span>`).join('') : '<span class="muted small">–</span>');
+  function guestChips(list, cls) {
+    return list.map((g) => `<span class="chip ${cls} guest">${esc(g.name)}${g.trial ? ' 🆕' : ''} <small>(${t('guest.of', { name: nameOf(g.host) })})</small>${g.host === uid() || isTrainer() ? `<button class="chip-x" data-a="guest-del" data-id="${g.evId}" data-h="${g.host}" data-i="${g.i}" aria-label="${t('remove')}">✕</button>` : ''}</span>`).join('');
+  }
+  function reactBar(path, obj) {
+    const r = obj.react || {}; const mine = r[uid()];
+    const counts = {}; Object.values(r).forEach((e) => { counts[e] = (counts[e] || 0) + 1; });
+    return `<div class="react">${REACTIONS.map((e) => `<button class="rx ${mine === e ? 'on' : ''}" data-a="react" data-p="${path}" data-e="${e}" title="${esc(Object.keys(r).filter((k) => r[k] === e).map(nameOf).join(', '))}">${e}${counts[e] ? `<b>${counts[e]}</b>` : ''}</button>`).join('')}</div>`;
+  }
+  function commentsBlock(target, open) {
+    const list = commentsFor(target).sort((a, b) => a.ts - b.ts);
+    const nc = newComments(target);
+    const head = `<button class="link sm cm-toggle" data-a="cm-toggle" data-t="${target}">💬 ${t('cm.count', { n: list.length })}${nc ? ` <span class="tag blue">${t('unread.new', { n: nc })}</span>` : ''} ${open ? '▲' : '▼'}</button>`;
+    if (!open) return `<div class="cm">${head}</div>`;
+    return `<div class="cm open">${head}
+      ${list.map((c) => `<div class="cmi"><div class="cmh"><b>${esc(c.authorName || nameOf(c.author))}</b><span class="muted small">${rel(c.ts)}</span>${c.author === uid() || isTrainer() ? `<button class="chip-x" data-a="cm-del" data-id="${c.id}" aria-label="${t('delete')}">✕</button>` : ''}</div><div>${linkify(c.text)}</div></div>`).join('')}
+      <form class="cmf" data-f="comment" data-t="${target}"><input name="text" data-keep maxlength="500" required placeholder="${t('cm.ph')}" autocomplete="off"><button class="btn sm">${t('cm.send')}</button></form></div>`;
+  }
+  function feedbackCard(ev) {
+    const d = useDoc('feedback/' + fbId(ev.id));
+    if (d === undefined) return '';
+    if (d || store.get('vb-fb-' + ev.id)) return `<div class="card fbdone">✅ ${t('fb.thanks')}${d ? ' ' + '★'.repeat(d.stars) : ''}</div>`;
+    return `<form class="card fbcard" data-f="feedback" data-id="${ev.id}"><h3>${t('fb.title')}</h3>
+      <div class="stars">${[1, 2, 3, 4, 5].map((n) => `<label><input type="radio" name="stars" value="${n}" required><span>★</span></label>`).join('')}</div>
+      <label>${t('fb.text')}<textarea name="text" rows="2" maxlength="500" placeholder="${t('fb.ph')}"></textarea></label>
+      <label class="check"><input type="checkbox" name="anon" checked> ${t('fb.anon')}</label>
+      <button class="btn block">${t('fb.send')}</button></form>`;
+  }
+  function feedbackSummary(ev) {
+    const list = S.feedback.filter((f) => f.event === ev.id);
+    if (!list.length) return `<p class="muted small">${t('fb.none')}</p>`;
+    const avg = list.reduce((s, f) => s + (Number(f.stars) || 0), 0) / list.length;
+    return `<div class="fbsum"><b>${'★'.repeat(Math.round(avg))}${'☆'.repeat(5 - Math.round(avg))}</b> ${avg.toFixed(1)} · ${t('fb.count', { n: list.length })}</div>
+      ${list.filter((f) => f.text).map((f) => `<div class="cmi"><div class="cmh"><b>${f.anon ? t('fb.anonName') : esc(f.name || nameOf(f.by))}</b><span>${'★'.repeat(f.stars)}</span></div><div>${nl2br(f.text)}</div></div>`).join('')}`;
+  }
   function viewTermin(id) {
     const ev = S.events.find((e) => e.id === id);
     if (!ev) return { title: t('ev.session'), back: '#/termine', html: `<div class="empty">${t('ev.notFound')}</div>` };
@@ -333,23 +468,33 @@
     const plan = (ev.plan || []).filter((p) => p.text || p.video);
     const ics = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(icsFor(ev));
     const attended = Object.keys(ev.attended || {}).filter((k) => ev.attended[k]);
+    const gIn = l.guestsIn.map((g) => ({ ...g, evId: ev.id })); const gWait = l.guestsWait.map((g) => ({ ...g, evId: ev.id }));
+    const min = Number(ev.minPlayers) || 0;
     let html = `<div class="card">
       ${ev.cancelled ? `<div class="alert red">${t('ev.cancelled')}</div>` : ''}
       <h2 class="ev-h">${esc(ev.title)}</h2>
       <div class="info"><span>📅</span><div>${esc(F_.long.format(ev.start))}<br><b>${timeRange(ev)}</b></div></div>
       ${ev.place ? `<div class="info"><span>📍</span><div><a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(ev.place)}" target="_blank" rel="noopener">${esc(ev.place)}</a></div></div>` : ''}
       ${ev.notes ? `<div class="info"><span>📝</span><div>${linkify(ev.notes)}</div></div>` : ''}
-      ${l.lim ? `<div class="info"><span>👥</span><div>${t('ev.places', { n: l.lim, free: Math.max(0, l.lim - l.confirmed.length) })}</div></div>` : ''}
+      ${l.lim ? `<div class="info"><span>👥</span><div>${t('ev.places', { n: l.lim, free: Math.max(0, l.lim - l.total) })}</div></div>` : ''}
       ${!past && !ev.cancelled ? `<div class="rsvp-big">${rsvpButtons(ev, st, true)}</div>
         <p class="center-text small">${t('ev.yourStatus')} <b class="st-t st-${st.k}">${st.label}</b>${st.k === 'wait' ? t('ev.waitExplain') : ''}</p>` : ''}
+      ${reactBar('events/' + ev.id, ev)}
     </div>`;
+    if (past && !ev.cancelled && ev.fb !== false && l.confirmed.includes(uid()) && (ev.end || ev.start) > now - 7 * 864e5) html += feedbackCard(ev);
     html += `<div class="card"><h3>${t('ev.participants')}</h3>
-      <div class="grp"><div class="gl">${t('ev.confirmed', { n: l.confirmed.length + (l.lim ? '/' + l.lim : '') })}</div>${chips(l.confirmed, 'ok')}</div>
-      ${l.waitlist.length ? `<div class="grp"><div class="gl">${t('ev.waitlist', { n: l.waitlist.length })}</div>${l.waitlist.map((x, i) => `<span class="chip wait">${i + 1}. ${esc(nameOf(x))}</span>`).join('')}</div>` : ''}
+      <div class="grp"><div class="gl">${t('ev.confirmed', { n: l.total + (l.lim ? '/' + l.lim : '') })}</div>${chips(l.confirmed, 'ok')}${guestChips(gIn, 'ok')}</div>
+      ${l.waitTotal ? `<div class="grp"><div class="gl">${t('ev.waitlist', { n: l.waitTotal })}</div>${l.waitlist.map((x, i) => `<span class="chip wait">${i + 1}. ${esc(nameOf(x))}</span>`).join('')}${guestChips(gWait, 'wait')}</div>` : ''}
       <div class="grp"><div class="gl">${t('ev.declined', { n: l.no.length })}</div>${chips(l.no, 'no')}</div>
       ${!past ? `<div class="grp"><div class="gl">${t('ev.noReply', { n: l.open.length })}</div>${chips(l.open)}</div>` : ''}
       ${ev.attendanceDone ? `<div class="grp"><div class="gl">${t('ev.attended', { n: attended.length })}</div>${chips(attended, 'ok')}</div>` : ''}
+      ${!past && !ev.cancelled ? `<a class="btn sm ghost" href="#/gast/${ev.id}">${t('guest.add')}</a>` : ''}
     </div>`;
+    const teams = ev.teams && ev.teams.n ? ev.teams : null;
+    if (teams || (isTrainer() && !past && !ev.cancelled)) {
+      html += `<div class="card"><h3>${t('teams.title')}</h3>${teams ? teamsHtml(Array.from({ length: teams.n }, (_, i) => teams['t' + i] || []), false) : `<p class="muted small">${t('teams.none')}</p>`}
+        ${isTrainer() ? `<a class="btn sm ghost" href="#/teams/${ev.id}">${teams ? t('teams.redo') : t('teams.draw')}</a>` : ''}</div>`;
+    }
     if (plan.length) {
       html += `<div class="card"><h3>${t('ev.planT')}</h3><ol class="plan">${plan.map((p) => {
         const v = p.video && vids[p.video];
@@ -357,20 +502,79 @@
       }).join('')}</ol></div>`;
     }
     if (ev.carpool) html += carpoolCard(ev, past);
+    html += `<div class="card">${commentsBlock('events/' + ev.id, true)}</div>`;
     html += `<div class="card"><h3>${t('ev.cal')}</h3><div class="row wrap-row">
       <a class="btn ghost sm" href="${ics}" download="${esc(ev.title.replace(/[^\p{L}\p{N}-]+/gu, '_'))}.ics">${t('ev.ics')}</a>
-      <a class="btn ghost sm" href="${gcalUrl(ev)}" target="_blank" rel="noopener">${t('ev.gcal')}</a></div></div>`;
+      <a class="btn ghost sm" href="${gcalUrl(ev)}" target="_blank" rel="noopener">${t('ev.gcal')}</a>
+      <a class="btn ghost sm" href="#/kalender-abo">${t('abo.short')}</a></div></div>`;
     if (isTrainer()) {
-      html += `<div class="card"><h3>${t('ev.coach')}</h3><div class="row wrap-row">
+      html += `<div class="card"><h3>${t('ev.coach')}</h3>
+        ${min && !past && !ev.cancelled ? `<div class="alert ${l.total < min ? 'warnbox' : 'ok'}">${l.total < min ? t('min.low', { n: l.total, min }) : t('min.ok', { n: l.total, min })}</div>` : ''}
+        <div class="row wrap-row">
         <a class="btn sm ghost" href="#/termin-edit/${ev.id}">${t('ev.edit')}</a>
         ${!past && !ev.cancelled ? `<button class="btn sm ghost" data-a="remind" data-id="${ev.id}">${t('ev.remind', { n: l.open.length })}</button>` : ''}
         ${started ? `<a class="btn sm ghost" href="#/anwesenheit/${ev.id}">${t('ev.attendance')}</a>` : ''}
         ${!past ? `<button class="btn sm ghost" data-a="cancel-ev" data-id="${ev.id}">${ev.cancelled ? t('ev.reactivate') : t('ev.cancel')}</button>` : ''}
         <button class="btn sm danger" data-a="del-ev" data-id="${ev.id}">${t('ev.delete')}</button></div>
-        ${!past ? `<p class="muted small">${t('ev.autoRemind')}</p>` : ''}</div>`;
+        ${!past ? `<p class="muted small">${t('ev.autoRemind')}${min ? ' ' + t('min.auto', { h: ev.minHours || 4 }) : ''}</p>` : ''}
+        ${started && ev.fb !== false ? `<h4>${t('fb.summary')}</h4>${feedbackSummary(ev)}` : ''}</div>`;
     }
     return { title: ev.title, back: '#/termine', html };
   }
+  // ---------- Guests
+  function viewGast(id) {
+    const ev = S.events.find((e) => e.id === id);
+    return { title: t('guest.title'), back: '#/termin/' + id, html: ev ? `<form class="card" data-f="guest" data-id="${id}">
+      <p class="muted">${esc(ev.title)} · ${esc(whenTxt(ev.start))}</p>
+      <label>${t('guest.name')}<input name="name" required maxlength="40" placeholder="${t('guest.namePh')}"></label>
+      <label class="check"><input type="checkbox" name="trial"> ${t('guest.trial')}</label>
+      <p class="small muted">${t('guest.hint')}</p>
+      <button class="btn block">${t('guest.save')}</button></form>` : `<div class="empty">${t('ev.notFound')}</div>` };
+  }
+  // ---------- Teams
+  function playerPool(ev) {
+    const l = rsvpLists(ev);
+    return l.confirmed.map((k) => ({ k, name: nameOf(k), s: Number(S.skills[k]) || 3 })).concat(l.guestsIn.map((g) => ({ k: g.k, name: g.name + ' (G)', s: g.trial ? 2 : 3 })));
+  }
+  function drawTeams(pool, n) {
+    const arr = pool.map((p) => ({ ...p, r: Math.random() })).sort((a, b) => b.s - a.s || a.r - b.r);
+    const teams = Array.from({ length: n }, () => []);
+    arr.forEach((p, i) => { const round = Math.floor(i / n); const pos = i % n; teams[round % 2 ? n - 1 - pos : pos].push(p); });
+    const sum = (tm) => tm.reduce((s, p) => s + p.s, 0);
+    for (let it = 0; it < 200; it++) { // small swaps to even out strength
+      const a = Math.floor(Math.random() * n), b = Math.floor(Math.random() * n); if (a === b || !teams[a].length || !teams[b].length) continue;
+      const i = Math.floor(Math.random() * teams[a].length), j = Math.floor(Math.random() * teams[b].length);
+      const before = Math.abs(sum(teams[a]) - sum(teams[b]));
+      const after = Math.abs(sum(teams[a]) - teams[a][i].s + teams[b][j].s - (sum(teams[b]) - teams[b][j].s + teams[a][i].s));
+      if (after < before) { const x = teams[a][i]; teams[a][i] = teams[b][j]; teams[b][j] = x; }
+    }
+    return teams;
+  }
+  const TEAM_COLORS = ['#1756c9', '#d64545', '#14a05a', '#c27c00'];
+  function teamsHtml(teams, showSkill) {
+    return `<div class="teams">${teams.map((tm, i) => {
+      const players = tm.map((p) => (typeof p === 'string' ? { k: p, name: p.startsWith('g:') ? (guestName(p) || '?') + ' (G)' : nameOf(p), s: Number(S.skills[p]) || 3 } : p));
+      return `<div class="team" style="--tc:${TEAM_COLORS[i % 4]}"><b>${t('teams.team', { n: i + 1 })}${showSkill ? ` <small>★ ${players.reduce((s, p) => s + p.s, 0)}</small>` : ''}</b>${players.map((p) => `<span>${esc(p.name)}${showSkill ? ` <small>${'★'.repeat(p.s)}</small>` : ''}</span>`).join('')}</div>`;
+    }).join('')}</div>`;
+  }
+  function guestName(k) { const [, host, i] = k.split(':'); for (const e of S.events) { const g = ((e.guests || {})[host] || [])[Number(i)]; if (g) return g.n; } return ''; }
+  function viewTeams(id) {
+    const ev = S.events.find((e) => e.id === id);
+    if (!ev || !isTrainer()) return { title: t('teams.title'), back: '#/termin/' + id, html: `<div class="empty">${t('att.na')}</div>` };
+    const pool = playerPool(ev);
+    const d = S.teamDraft && S.teamDraft.ev === id ? S.teamDraft : null;
+    const n = d ? d.n : Math.min(4, Math.max(2, Math.round(pool.length / 6) || 2));
+    return {
+      title: t('teams.title'), back: '#/termin/' + id,
+      html: `<div class="card"><p class="muted">${esc(ev.title)} · ${esc(whenTxt(ev.start))} · ${t('teams.players', { n: pool.length })}</p>
+        <div class="seg">${[2, 3, 4].map((k) => `<button class="${n === k ? 'on' : ''}" data-a="teams-n" data-id="${id}" data-n="${k}">${t('teams.nTeams', { n: k })}</button>`).join('')}</div>
+        <div class="row wrap-row"><button class="btn" data-a="teams-draw" data-id="${id}" data-n="${n}">🎲 ${d ? t('teams.again') : t('teams.draw')}</button>${d ? `<button class="btn ghost" data-a="teams-save" data-id="${id}">💾 ${t('teams.save')}</button>` : ''}</div>
+        ${d ? teamsHtml(d.teams, true) : ''}
+        <p class="small muted">${t('teams.skillHint')}</p></div>
+        <div class="card"><h3>${t('teams.skills')}</h3>${pool.filter((p) => !p.k.startsWith('g:')).map((p) => `<div class="skrow"><span>${esc(p.name)}</span>${skillSelect(p.k)}</div>`).join('') || `<p class="muted">${t('teams.noPlayers')}</p>`}</div>`
+    };
+  }
+  const skillSelect = (k) => `<span class="skill">${[1, 2, 3, 4, 5].map((n) => `<button class="${(Number(S.skills[k]) || 3) >= n ? 'on' : ''}" data-a="skill" data-u="${k}" data-n="${n}" aria-label="${n}">★</button>`).join('')}</span>`;
   function carpoolCard(ev, past) {
     const rides = ev.rides || {}; const me = uid(); const mine = rides[me];
     const drivers = Object.entries(rides).filter(([, r]) => r.type === 'fahrer');
@@ -405,7 +609,7 @@
     if (id && !ev) return { title: t('ev.session'), back: '#/termine', html: `<div class="empty">${t('ev.notFound')}</div>` };
     if (!isTrainer()) return { title: t('ev.session'), back: '#/termine', html: `<div class="empty">${t('evf.onlyCoach')}</div>` };
     const last = [...S.events].sort((a, b) => b.created - a.created)[0];
-    const d = ev || { title: t('evf.defaultTitle'), start: nextSlot(last), end: 0, place: last ? last.place : '', limit: last ? last.limit : 0, notes: '', plan: [], carpool: false };
+    const d = ev || { title: t('evf.defaultTitle'), start: nextSlot(last), end: 0, place: last ? last.place : '', limit: last ? last.limit : 0, notes: '', plan: [], carpool: false, minPlayers: last ? last.minPlayers || 0 : 0, minHours: last ? last.minHours || 4 : 4, fb: true };
     if (!d.end) d.end = d.start + 2 * 3600e3;
     const plan = d.plan && d.plan.length ? d.plan : [{ text: '', video: '' }];
     return {
@@ -413,7 +617,7 @@
       html: `<form class="card" data-f="event" data-id="${ev ? ev.id : ''}">
         <label>${t('evf.title')}<input name="title" required maxlength="60" value="${esc(d.title)}" list="titles"></label>
         <datalist id="titles">${t('evf.titles').map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
-        <div class="grid3"><label>${t('evf.date')}<input name="date" type="date" required value="${toDateInput(d.start)}"></label>
+        <div class="grid3 dates"><label>${t('evf.date')}<input name="date" type="date" required value="${toDateInput(d.start)}"></label>
         <label>${t('evf.from')}<input name="from" type="time" required value="${toTimeInput(d.start)}"></label>
         <label>${t('evf.to')}<input name="to" type="time" value="${toTimeInput(d.end)}"></label></div>
         <label>${t('evf.place')}<input name="place" maxlength="100" value="${esc(d.place)}" placeholder="${t('evf.placePh')}"></label>
@@ -422,6 +626,9 @@
         <fieldset><legend>${t('evf.plan')}</legend><div id="plan">${plan.map(planRow).join('')}</div>
           <button type="button" class="btn sm ghost" data-a="plan-add">${t('evf.addEx')}</button></fieldset>
         <label class="check"><input type="checkbox" name="carpool" ${d.carpool ? 'checked' : ''}> ${t('evf.carpool')}</label>
+        <fieldset><legend>${t('min.legend')}</legend><div class="grid3"><label class="span2">${t('min.players')} <span class="muted small">${t('min.hint')}</span><input name="minPlayers" type="number" min="0" max="100" value="${Number(d.minPlayers) || 0}"></label>
+          <label>${t('min.check')}<select name="minHours">${[2, 3, 4, 6, 12, 24].map((h) => `<option value="${h}" ${(Number(d.minHours) || 4) === h ? 'selected' : ''}>${t('min.hBefore', { h })}</option>`).join('')}</select></label></div></fieldset>
+        <label class="check"><input type="checkbox" name="fb" ${d.fb === false ? '' : 'checked'}> ${t('fb.formOpt')}</label>
         ${!ev ? `<label>${t('evf.repeat')}<select name="repeat"><option value="1">${t('evf.once')}</option>${[2, 4, 6, 8, 10, 12, 16, 20].map((n) => `<option value="${n}">${t('evf.weekly', { n })}</option>`).join('')}</select></label>` : ''}
         <label class="check"><input type="checkbox" name="notify" ${ev ? '' : 'checked'}> ${t('evf.notify')}</label>
         <button class="btn block">${ev ? t('evf.save') : t('evf.create')}</button>
@@ -454,14 +661,23 @@
   // ---------------------------------------------------------- News & messages
   function viewNews() {
     const list = [...S.posts].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.ts - a.ts);
+    const act = activeMembers();
     return {
       title: t('news.title'), action: `<a class="btn sm" href="#/nachricht">${t('news.write')}</a>`,
-      html: list.length ? list.map((p) => `<div class="card post ${p.pinned ? 'pinned' : ''}">
-          <div class="post-h"><span class="tag ${p.type === 'news' ? 'blue' : ''}">${p.pinned ? '📌 ' : ''}${p.type === 'news' ? t('news.info') : t('news.msg')}</span>
+      html: list.length ? list.map((p) => {
+        const target = 'posts/' + p.id; const isNew = p.author !== uid() && p.ts > PREV.news;
+        const reads = p.reads || {}; const others = act.filter((m) => m.id !== p.author);
+        const readN = others.filter((m) => reads[m.id]).length; const unread = others.filter((m) => !reads[m.id]);
+        return `<div class="card post ${p.pinned ? 'pinned' : ''}" data-post="${p.id}">
+          <div class="post-h"><span class="tag ${p.type === 'news' ? 'blue' : ''}">${p.pinned ? '📌 ' : ''}${p.type === 'news' ? t('news.info') : t('news.msg')}</span>${isNew ? `<span class="tag newt">${t('unread.newTag')}</span>` : ''}
           <span class="muted small">${esc(p.authorName || nameOf(p.author))} · ${rel(p.ts)}</span></div>
           ${p.title ? `<h3>${esc(p.title)}</h3>` : ''}<p>${linkify(p.text)}</p>
+          ${reactBar(target, p)}
+          ${(isTrainer() || p.author === uid()) && p.type === 'news' ? `<details class="reads"><summary>👁 ${t('read.count', { n: readN, total: others.length })}</summary>${unread.length ? `<div class="small muted">${t('read.missing')}: ${unread.map((m) => esc(m.name)).join(', ')}</div><button class="btn sm ghost" data-a="read-remind" data-id="${p.id}">🔔 ${t('read.remind', { n: unread.length })}</button>` : `<div class="small ok">${t('read.all')}</div>`}</details>` : ''}
+          ${commentsBlock(target, S.openComments.has(target))}
           ${isTrainer() || p.author === uid() ? `<div class="row">${isTrainer() ? `<button class="link sm" data-a="pin" data-id="${p.id}">${p.pinned ? t('news.unpin') : t('news.pin')}</button>` : ''}<button class="link sm red" data-a="del-post" data-id="${p.id}">${t('delete')}</button></div>` : ''}
-        </div>`).join('') : `<div class="empty">${t('news.none')}</div>`
+        </div>`;
+      }).join('') : `<div class="empty">${t('news.none')}</div>`
     };
   }
   function viewNachricht() {
@@ -518,18 +734,39 @@
   }
 
   // ---------------------------------------------------------- Videos
+  const myHomework = () => S.homework.filter((h) => h.to === 'all' || (Array.isArray(h.to) && h.to.includes(uid())));
+  const hwRecipients = (h) => (h.to === 'all' ? activeMembers().map((m) => m.id) : (h.to || []));
+  function homeworkCards() {
+    const vids = Object.fromEntries(S.videos.map((v) => [v.id, v]));
+    let html = '';
+    const mine = myHomework().filter((h) => vids[h.video]).sort((a, b) => (a.done && a.done[uid()] ? 1 : 0) - (b.done && b.done[uid()] ? 1 : 0) || b.ts - a.ts);
+    if (mine.length) {
+      html += `<h4 class="sec">📚 ${t('hw.mine')}</h4>` + mine.map((h) => {
+        const v = vids[h.video]; const done = h.done && h.done[uid()];
+        return `<div class="card hw ${done ? 'done' : ''}"><div class="hw-b"><b>${esc(v.title)}</b>${h.note ? `<div class="small">${esc(h.note)}</div>` : ''}${h.due ? `<div class="small muted">${t('hw.due', { date: F_.dm.format(new Date(h.due)) })}</div>` : ''}</div>
+          <div class="row"><button class="btn sm ghost" data-a="play" data-id="${v.id}" data-hw="${h.id}">▶</button><button class="btn sm ${done ? 'on-yes' : ''}" data-a="hw-done" data-id="${h.id}">${done ? '✓ ' + t('hw.done') : t('hw.markDone')}</button></div></div>`;
+      }).join('');
+    }
+    if (isTrainer() && S.homework.length) {
+      html += `<details class="card"><summary><b>📋 ${t('hw.overview', { n: S.homework.length })}</b></summary>` + [...S.homework].sort((a, b) => b.ts - a.ts).map((h) => {
+        const v = vids[h.video]; const rec = hwRecipients(h); const done = rec.filter((u) => h.done && h.done[u]);
+        return `<div class="hwrow"><div><b>${esc(v ? v.title : '?')}</b><div class="small muted">${t('hw.progress', { n: done.length, total: rec.length })}${rec.length - done.length ? ' · ' + t('hw.open') + ': ' + rec.filter((u) => !(h.done && h.done[u])).map(nameOf).map(esc).join(', ') : ''}</div></div><button class="link sm red" data-a="hw-del" data-id="${h.id}">${t('delete')}</button></div>`;
+      }).join('') + '</details>';
+    }
+    return html;
+  }
   function viewVideos() {
     const cats = [...new Set(S.videos.map((v) => v.category).filter(Boolean))];
     const list = S.videos.filter((v) => S.videoCat === '*' || v.category === S.videoCat).sort((a, b) => b.ts - a.ts);
     const chip = (c, label) => `<button class="chip ${S.videoCat === c ? 'on' : ''}" data-a="vcat" data-c="${esc(c)}">${esc(label)}</button>`;
     return {
       title: t('vid.title'), action: isTrainer() ? `<a class="btn sm" href="#/video-neu">${t('vid.add')}</a>` : '',
-      html: `<div class="chips-row">${chip('*', t('vid.all'))}${cats.map((c) => chip(c, c)).join('')}</div>
+      html: `${homeworkCards()}<div class="chips-row">${chip('*', t('vid.all'))}${cats.map((c) => chip(c, c)).join('')}</div>
         ${list.length ? `<div class="vgrid">${list.map((v) => {
           const y = ytId(v.url);
           return `<div class="vcard"><button class="thumb" data-a="play" data-id="${v.id}" aria-label="${t('vid.play')}">${y ? `<img loading="lazy" src="https://i.ytimg.com/vi/${y}/hqdefault.jpg" alt="">` : ''}<span class="play">▶</span></button>
-            <div class="vbody"><span class="tag">${esc(v.category || t('vid.general'))}</span><h4>${esc(v.title)}</h4>${v.description ? `<p class="small muted">${esc(v.description)}</p>` : ''}
-            ${isTrainer() ? `<div class="row"><a class="link sm" href="#/video-edit/${v.id}">${t('vid.edit')}</a><button class="link sm red" data-a="del-video" data-id="${v.id}">${t('delete')}</button></div>` : ''}</div></div>`;
+            <div class="vbody"><span class="tag">${esc(v.category || t('vid.general'))}</span>${v.ts > PREV.videos && v.by !== uid() ? ` <span class="tag newt">${t('unread.newTag')}</span>` : ''}<h4>${esc(v.title)}</h4>${v.description ? `<p class="small muted">${esc(v.description)}</p>` : ''}
+            ${isTrainer() ? `<div class="row wrap-row"><a class="link sm" href="#/aufgabe-neu/${v.id}">📚 ${t('hw.assign')}</a><a class="link sm" href="#/video-edit/${v.id}">${t('vid.edit')}</a><button class="link sm red" data-a="del-video" data-id="${v.id}">${t('delete')}</button></div>` : ''}</div></div>`;
         }).join('')}</div>` : `<div class="empty">${t('vid.none')}</div>`}`
     };
   }
@@ -552,14 +789,33 @@
           <button class="btn block">${v ? t('vidf.save') : t('vidf.addBtn')}</button></form>`
     };
   }
-  function playVideo(id) {
+  function viewAufgabeForm(vid) {
+    if (!isTrainer()) return { title: t('hw.new'), back: '#/videos', html: '' };
+    const vids = [...S.videos].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    return {
+      title: t('hw.new'), back: '#/videos',
+      html: `<form class="card" data-f="homework">
+        <label>${t('hw.video')}<select name="video" required>${vids.map((v) => `<option value="${v.id}" ${v.id === vid ? 'selected' : ''}>${esc(v.title)}</option>`).join('')}</select></label>
+        <label>${t('hw.note')}<input name="note" maxlength="140" placeholder="${t('hw.notePh')}"></label>
+        <label>${t('hw.dueL')}<input name="due" type="date"></label>
+        <fieldset><legend>${t('hw.to')}</legend>
+          <label class="check line"><input type="radio" name="to" value="all" checked> ${t('msg.all')}</label>
+          <label class="check line"><input type="radio" name="to" value="some"> ${t('hw.some')}</label>
+          <div class="hw-people">${activeMembers().filter((m) => m.id !== uid()).map((m) => `<label class="check line"><input type="checkbox" name="who" value="${m.id}"> ${esc(m.name)}</label>`).join('')}</div></fieldset>
+        <label class="check"><input type="checkbox" name="push" checked> ${t('msg.push')}</label>
+        <button class="btn block">${t('hw.create')}</button></form>`
+    };
+  }
+  function playVideo(id, hw) {
     const v = S.videos.find((x) => x.id === id); if (!v) return;
     const y = ytId(v.url);
+    const h = hw ? S.homework.find((x) => x.id === hw) : null;
+    const hwBtn = h && !(h.done && h.done[uid()]) ? `<button class="btn block" data-a="hw-done" data-id="${h.id}" data-close="1">✓ ${t('hw.markDone')}</button>` : '';
     if (!y && v.url) { window.open(v.url, '_blank', 'noopener'); return; }
     const m = document.createElement('div'); m.className = 'modal'; m.dataset.a = 'close-modal';
     m.innerHTML = `<div class="modal-box"><button class="x close" data-a="close-modal" aria-label="${t('close')}">✕</button>
       ${y ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${y}?autoplay=1&rel=0&playsinline=1&hl=${S.lang}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : `<div class="video ph-video">🏐<p>${t('demo.noVideo')}</p></div>`}
-      <div class="pad"><h3>${esc(v.title)}</h3>${v.description ? `<p class="muted">${esc(v.description)}</p>` : ''}</div></div>`;
+      <div class="pad"><h3>${esc(v.title)}</h3>${v.description ? `<p class="muted">${esc(v.description)}</p>` : ''}${hwBtn}</div></div>`;
     document.body.appendChild(m);
   }
   function langModal() {
@@ -581,7 +837,9 @@
       html: `<div class="card me"><div class="avatar">${esc((S.me.name || '?').slice(0, 1).toUpperCase())}</div><div><b>${esc(S.me.name)}</b><br><span class="muted small">${tr ? t('role.coach') : t('role.member')}</span></div><a class="link sm" href="#/profil">${t('more.change')}</a></div>
         <div class="menu">
           ${item('#/mehr', curFlag(), t('lang.label'), esc(langName), 0, 'lang-open')}
-          ${item('#/mehr', '🔔', t('more.push'), pushTxt, 0, perm === 'granted' || DB.demo ? '' : 'push-on')}
+          ${item('#/push-prefs', '🔔', t('more.push'), pushTxt)}
+          ${item('#/kalender-abo', '📆', t('abo.title'), t('abo.sub'))}
+          ${item('#/ziele', '🎯', t('goal.title'), t('goal.sub'))}
           ${!isStandalone() ? item('#/install', '📲', t('more.install'), t('more.installSub')) : ''}
           ${item('#/nachricht/trainer', '✉️', t('more.toCoach'), t('more.toCoachSub'))}
           ${item('#/kasse', '💶', t('more.cash'), tr ? t('more.cashCoach') : t('more.cashMember'))}
@@ -591,6 +849,7 @@
         ${tr ? `<h4 class="sec">${t('more.coachArea')}</h4><div class="menu">
           ${item('#/mitglieder', '👥', t('more.members'), pend ? t('more.waiting', { n: pend }) : t('more.active', { n: activeMembers().length }), pend)}
           ${item('#/postfach', '📥', t('more.inbox'), t('more.inboxSub'), S.inbox.length)}
+          ${item('#/design', '🎨', t('design.title'), t('design.sub'))}
         </div>` : ''}
         <div class="menu">${DB.demo ? item('#/mehr', '🔄', t('more.demoSwitch'), '', 0, 'demo-switch') + item('#/mehr', '♻️', t('demo.reset'), '', 0, 'demo-reset') : item('#/mehr', '🚪', t('logout'), '', 0, 'logout')}</div>
         <p class="center-text small muted">${esc(C.appName || 'Volleyball')} · ${t('publisher', { name: C.publisher || '' })}<br>${t('more.version', { v: '1.1' })}</p>`
@@ -610,6 +869,135 @@
         <details class="card"><summary><b>${isIOS ? '🤖 Android' : '🍏 iPhone'}</b></summary>${isIOS ? andSteps : iosSteps}</details>
         <p class="small muted center-text">${t('inst.note')}</p>`
     };
+  }
+
+  // ---------- Calendar subscription
+  function calUrl() { return S.cal && S.cal.key && C.pushUrl ? C.pushUrl.replace(/\/$/, '') + '/cal?k=' + encodeURIComponent(S.cal.key) : ''; }
+  function viewKalenderAbo() {
+    if (isTrainer() && !DB.demo && S.cal === null && C.pushUrl) { DB.set('settings/cal', { key: Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join(''), ts: Date.now() }, false).catch(() => { /* */ }); }
+    const url = calUrl();
+    let html = `<div class="card"><p>${t('abo.text')}</p>`;
+    if (DB.demo) html += `<div class="alert warnbox">${t('abo.demo')}</div>`;
+    else if (!C.pushUrl) html += `<div class="alert warnbox">${t('abo.noWorker')}</div>`;
+    else if (!url) html += `<p class="muted">${isTrainer() ? t('loading') : t('abo.waitCoach')}</p>`;
+    else {
+      const webcal = url.replace(/^https:/, 'webcal:');
+      html += `<div class="abo">
+        <a class="btn block" href="${esc(webcal)}">🍏 ${t('abo.apple')}</a>
+        <a class="btn block ghost" href="https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}" target="_blank" rel="noopener">🗓 ${t('abo.google')}</a>
+        <button class="btn block ghost" data-a="copy-text" data-text="${esc(url)}">📋 ${t('abo.copy')}</button></div>
+        <p class="small muted">${t('abo.note')}</p>`;
+      if (isTrainer()) html += `<button class="link sm red" data-a="cal-newkey">${t('abo.newKey')}</button>`;
+    }
+    return { title: t('abo.title'), back: '#/mehr', html: html + '</div>' };
+  }
+  // ---------- Push preferences
+  const PUSH_CATS = ['events', 'reminders', 'news', 'polls', 'videos', 'cash', 'coach'];
+  function viewPushPrefs() {
+    const p = S.prefs || {}; const off = new Set(p.off || []); const q = p.quiet || {};
+    const perm = pushPerm();
+    const hours = Array.from({ length: 24 }, (_, h) => h);
+    return {
+      title: t('pp.title'), back: '#/mehr',
+      html: `<div class="card">${DB.demo ? `<p class="muted">${t('more.pushDemo')}</p>` : perm === 'granted' ? `<div class="alert ok">${t('more.pushOn')}</div>` : `<button class="btn block" data-a="push-on">${t('push.enable')}</button><p class="small muted">${perm === 'denied' ? t('more.pushBlocked') : isIOS && !isStandalone() ? t('push.bannerIos') : t('push.bannerTxt')}</p>`}</div>
+        <form class="card" data-f="prefs"><h3>${t('pp.which')}</h3>
+          ${PUSH_CATS.filter((c) => c !== 'coach' || isTrainer()).map((c) => `<label class="check line"><input type="checkbox" name="cat" value="${c}" ${off.has(c) ? '' : 'checked'}> <span>${t('pp.cat.' + c)}<br><small class="muted">${t('pp.sub.' + c)}</small></span></label>`).join('')}
+          <p class="small muted">${t('pp.always')}</p>
+          <h3>${t('pp.quiet')}</h3>
+          <label class="check"><input type="checkbox" name="qon" ${q.on ? 'checked' : ''}> ${t('pp.quietOn')}</label>
+          <div class="grid3"><label>${t('pp.from')}<select name="qfrom">${hours.map((h) => `<option value="${h}" ${(q.from ?? 22) === h ? 'selected' : ''}>${pad(h)}:00</option>`).join('')}</select></label>
+          <label>${t('pp.to')}<select name="qto">${hours.map((h) => `<option value="${h}" ${(q.to ?? 7) === h ? 'selected' : ''}>${pad(h)}:00</option>`).join('')}</select></label></div>
+          <p class="small muted">${t('pp.quietHint')}</p>
+          <button class="btn block">${t('evf.save')}</button></form>`
+    };
+  }
+  // ---------- Goals
+  function viewZiele(who) {
+    const other = who && who !== uid();
+    const doc = other ? useDoc('goals/' + who) : S.goals;
+    if (other && !isTrainer()) return { title: t('goal.title'), back: '#/mehr', html: '' };
+    const list = (doc && doc.list) || [];
+    const card = (g) => {
+      const pct = g.target ? Math.min(100, Math.round(((Number(g.progress) || 0) / g.target) * 100)) : (g.done ? 100 : 0);
+      return `<div class="card goal ${g.done ? 'done' : ''}"><div class="goal-h"><b>${g.done ? '✅ ' : '🎯 '}${esc(g.text)}</b>${!other ? `<button class="chip-x" data-a="goal-del" data-id="${g.id}" aria-label="${t('delete')}">✕</button>` : ''}</div>
+        ${g.target ? `<div class="progress"><span style="width:${pct}%"></span></div><div class="goal-row"><span class="small">${Number(g.progress) || 0} / ${g.target}</span>${!other ? `<span class="row"><button class="btn sm ghost" data-a="goal-step" data-id="${g.id}" data-d="-1">−</button><button class="btn sm" data-a="goal-step" data-id="${g.id}" data-d="1">＋</button></span>` : ''}</div>` : ''}
+        ${!other ? `<button class="link sm" data-a="goal-done" data-id="${g.id}">${g.done ? t('goal.reopen') : t('goal.markDone')}</button>` : ''}</div>`;
+    };
+    if (other) return { title: t('goal.of', { name: nameOf(who) }), back: '#/mitglieder', html: doc === undefined ? `<div class="empty">${t('goal.notShared')}</div>` : (list.length ? list.map(card).join('') : `<div class="empty">${t('goal.none')}</div>`) };
+    return {
+      title: t('goal.title'), back: '#/mehr',
+      html: `<form class="card cmf goalf" data-f="goal"><input name="text" data-keep required maxlength="80" placeholder="${t('goal.ph')}" autocomplete="off"><input name="target" data-keep type="number" min="0" max="10000" placeholder="${t('goal.target')}"><button class="btn sm">＋</button></form>
+        ${list.length ? [...list].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || b.ts - a.ts).map(card).join('') : `<div class="empty">${t('goal.none')}<br><span class="small">${t('goal.example')}</span></div>`}
+        <label class="check card"><input type="checkbox" data-a="goal-share" ${doc && doc.shared ? 'checked' : ''}> ${t('goal.share')}</label>`
+    };
+  }
+  // ---------- Team design
+  const PRESETS = [['#1756c9', '#ffb703'], ['#d62839', '#ffd166'], ['#2a9d8f', '#f4a261'], ['#6a4c93', '#ffca3a'], ['#111827', '#22c55e'], ['#e85d04', '#0f172a']];
+  function viewDesign() {
+    if (!isTrainer()) return { title: t('design.title'), back: '#/mehr', html: '' };
+    const th = S.theme || {};
+    return {
+      title: t('design.title'), back: '#/mehr',
+      html: `<form class="card" data-f="design">
+        <label>${t('design.name')}<input name="name" maxlength="40" value="${esc(th.name || '')}" placeholder="${esc(C.groupName || 'Volleyball Group')}"></label>
+        <div class="grid3"><label>${t('design.c1')}<input name="c1" type="color" value="${hexOk(th.c1) ? th.c1 : '#1756c9'}"></label><label>${t('design.c2')}<input name="c2" type="color" value="${hexOk(th.c2) ? th.c2 : '#ffb703'}"></label></div>
+        <div class="presets">${PRESETS.map(([a, b]) => `<button type="button" class="preset" data-a="preset" data-c1="${a}" data-c2="${b}" style="--a:${a};--b:${b}" aria-label="${a}"></button>`).join('')}</div>
+        <label>${t('design.logo')}<input name="logo" type="file" accept="image/*"></label>
+        <input type="hidden" name="logoData" value="">
+        <div class="logo-prev">${th.logo ? `<img src="${esc(th.logo)}" alt=""><button type="button" class="link sm red" data-a="logo-remove">${t('design.logoRemove')}</button>` : `<span class="muted small">${t('design.noLogo')}</span>`}</div>
+        <p class="small muted">${t('design.hint')}</p>
+        <div class="row"><button class="btn">${t('evf.save')}</button><button type="button" class="btn ghost" data-a="design-reset">${t('design.reset')}</button></div></form>`
+    };
+  }
+  // ---------- Search
+  function viewSuche() {
+    return { title: t('search.title'), back: '#/termine', html: `<div class="card"><input id="q" data-keep type="search" placeholder="${t('search.ph')}" value="${esc(S.q)}" autocomplete="off"></div><div id="results">${searchResults()}</div>` };
+  }
+  function searchResults() {
+    const q = S.q.trim().toLowerCase();
+    if (q.length < 2) return `<p class="center-text muted small">${t('search.hint')}</p>`;
+    const hit = (...xs) => xs.some((x) => String(x || '').toLowerCase().includes(q));
+    const groups = [
+      [t('tab.events'), S.events.filter((e) => hit(e.title, e.place, e.notes)).sort((a, b) => b.start - a.start).map((e) => [`#/termin/${e.id}`, e.title, whenTxt(e.start) + (e.place ? ' · ' + e.place : '')])],
+      [t('tab.news'), S.posts.filter((p) => hit(p.title, p.text)).map((p) => ['#/news', p.title || p.text.slice(0, 60), (p.authorName || '') + ' · ' + rel(p.ts)])],
+      [t('tab.polls'), S.polls.filter((p) => hit(p.question, ...(p.options || []))).map((p) => ['#/umfragen', p.question, ''])],
+      [t('tab.videos'), S.videos.filter((v) => hit(v.title, v.category, v.description)).map((v) => ['#/videos', v.title, v.category || ''])],
+      [t('search.people'), activeMembers().filter((m) => hit(m.name)).map((m) => [isTrainer() ? '#/mitglieder' : '#/mehr', m.name, m.role === 'trainer' ? t('mem.coach') : ''])],
+      [t('search.comments'), S.comments.filter((c) => hit(c.text)).map((c) => [c.target.startsWith('events/') ? '#/termin/' + c.target.slice(7) : '#/news', c.text.slice(0, 70), (c.authorName || '') + ' · ' + rel(c.ts)])]
+    ].filter(([, l]) => l.length);
+    if (!groups.length) return `<div class="empty">${t('search.none')}</div>`;
+    return groups.map(([g, l]) => `<h4 class="sec">${esc(g)} (${l.length})</h4><div class="menu">${l.slice(0, 20).map(([href, a, b]) => `<a class="mitem" href="${href}"><span class="ml">${esc(a)}${b ? `<small>${esc(b)}</small>` : ''}</span><span class="chev">›</span></a>`).join('')}</div>`).join('');
+  }
+  // ---------- Unread badges
+  function badges() {
+    const now = Date.now();
+    const evComments = S.comments.filter((c) => c.target.startsWith('events/') && c.author !== uid() && c.ts > (SEEN.c[c.target] || SEEN.start)).length;
+    const postComments = S.comments.filter((c) => c.target.startsWith('posts/') && c.author !== uid() && c.ts > (SEEN.c[c.target] || SEEN.start)).length;
+    const b = {
+      termine: S.events.filter((e) => (e.end || e.start) >= now && !e.cancelled && myStatus(e).k === 'open').length + evComments,
+      news: S.posts.filter((p) => p.author !== uid() && p.ts > SEEN.news).length + postComments,
+      umfragen: S.polls.filter((p) => !p.closed && (p.votes || {})[uid()] === undefined).length,
+      videos: S.videos.filter((v) => v.ts > SEEN.videos).length + myHomework().filter((h) => !(h.done && h.done[uid()])).length,
+      mehr: isTrainer() ? S.members.filter((m) => m.status === 'pending').length + S.inbox.length : 0
+    };
+    const total = Object.values(b).reduce((s, n) => s + n, 0);
+    try { if ('setAppBadge' in navigator) { if (total) navigator.setAppBadge(total); else navigator.clearAppBadge(); } } catch (e) { /* */ }
+    return b;
+  }
+  // After drawing a page: mark things as seen / read
+  const readMarked = new Set();
+  function afterRender(r, id) {
+    if (r !== 'design' && S.previewing) { S.previewing = false; applyTheme(S.theme); }
+    if (r === 'news') {
+      if (S.posts.some((p) => p.ts > SEEN.news)) { PREV.news = SEEN.news; SEEN.news = Date.now(); saveSeen(); }
+      S.posts.forEach((p) => {
+        if (p.author !== uid() && !(p.reads || {})[uid()] && !readMarked.has(p.id)) { readMarked.add(p.id); DB.update('posts/' + p.id, { ['reads.' + uid()]: Date.now() }).catch(() => readMarked.delete(p.id)); }
+      });
+      S.openComments.forEach((tg) => { if (tg.startsWith('posts/') && newComments(tg)) markComments(tg); });
+    }
+    if (r === 'videos' && S.videos.some((v) => v.ts > SEEN.videos)) { PREV.videos = SEEN.videos; SEEN.videos = Date.now(); saveSeen(); }
+    if (r === 'termin' && id && newComments('events/' + id)) markComments('events/' + id);
+    if (r === 'suche') { const q = $('#q'); if (q && document.activeElement !== q) { q.focus(); try { q.setSelectionRange(q.value.length, q.value.length); } catch (e) { /* */ } } }
   }
 
   // ---------------------------------------------------------- Cash box
@@ -668,6 +1056,7 @@
     return {
       title: t('stats.title'), back: '#/mehr',
       html: `<div class="seg">${['30', '90', '365', 'all'].map((k) => `<button class="${S.statRange === k ? 'on' : ''}" data-a="stat-range" data-r="${k}">${t('stats.' + k)}</button>`).join('')}</div>
+        ${isTrainer() ? (() => { const fbs = S.feedback.filter((f) => past.some((e) => e.id === f.event)); return fbs.length ? `<div class="card center-text"><div class="muted small">${t('fb.avgAll')}</div><div class="sum">${'★'.repeat(Math.round(fbs.reduce((a, f) => a + f.stars, 0) / fbs.length))} ${(fbs.reduce((a, f) => a + f.stars, 0) / fbs.length).toFixed(1)}</div><div class="small muted">${t('fb.count', { n: fbs.length })}</div></div>` : ''; })() : ''}
         <div class="kpis"><div class="kpi"><b>${past.length}</b><span>${t('stats.events')}</span></div><div class="kpi"><b>${nf.format(avg)}</b><span>${t('stats.avg')}</span></div><div class="kpi"><b>${past.length ? Math.round(((cnt[uid()] || 0) / past.length) * 100) : 0}%</b><span>${t('stats.mine')}</span></div></div>
         <div class="card">${visible.map((r) => { const i = rows.indexOf(r); const pct = past.length ? Math.round((r.n / past.length) * 100) : 0; return `<div class="stat ${r.m.id === uid() ? 'me' : ''}"><span class="sn">${i < 3 && r.n ? medal[i] : i + 1 + '.'} ${esc(r.m.name)}</span><span class="sbar"><span style="width:${pct}%"></span></span><span class="sv">${r.n} · ${pct}%</span></div>`; }).join('') || `<p class="muted">${t('stats.none')}</p>`}</div>
         <p class="small muted center-text">${t('stats.note')}${isTrainer() ? '' : t('stats.noteMember')}</p>`
@@ -682,9 +1071,9 @@
       title: t('mem.title'), back: '#/mehr', action: `<button class="btn sm" data-a="invite">${t('mem.invite')}</button>`,
       html: `${pend.length ? `<h4 class="sec">${t('mem.waiting')}</h4>${pend.map((m) => `<div class="card mrow"><b>${esc(m.name)}</b><div class="row"><button class="btn sm" data-a="approve" data-id="${m.id}">${t('mem.approve')}</button><button class="btn sm danger" data-a="reject" data-id="${m.id}">${t('mem.reject')}</button></div></div>`).join('')}` : ''}
         <h4 class="sec">${t('mem.active', { n: activeMembers().length })}</h4>
-        ${activeMembers().map((m) => `<div class="card mrow"><div><b>${esc(m.name)}</b> ${m.role === 'trainer' ? `<span class="tag blue">${t('mem.coach')}</span>` : ''} ${m.lang ? `<span class="small">${(I.langs.find((l) => l.code === m.lang) || {}).flag || ''}</span>` : ''}</div>
+        ${activeMembers().map((m) => `<div class="card mrow"><div><b>${esc(m.name)}</b> ${m.role === 'trainer' ? `<span class="tag blue">${t('mem.coach')}</span>` : ''} ${m.lang ? `<span class="small">${(I.langs.find((l) => l.code === m.lang) || {}).flag || ''}</span>` : ''}<div class="row small">${skillSelect(m.id)}<a class="link sm" href="#/ziele/${m.id}">🎯 ${t('goal.short')}</a></div></div>
           ${m.id !== uid() ? `<div class="row"><button class="link sm" data-a="role" data-id="${m.id}">${m.role === 'trainer' ? t('mem.toMember') : t('mem.toCoach')}</button><button class="link sm red" data-a="reject" data-id="${m.id}">${t('mem.remove')}</button></div>` : `<span class="muted small">${t('mem.you')}</span>`}</div>`).join('')}
-        <p class="small muted">${t('mem.note')}</p>`
+        <p class="small muted">${t('mem.note')} ${t('teams.skillHint')}</p>`
     };
   }
 
@@ -747,7 +1136,7 @@
     'poll-close': (el) => { const p = S.polls.find((x) => x.id === el.dataset.id); return DB.update('polls/' + p.id, { closed: !p.closed }); },
     'poll-del': (el) => confirmDo(t('poll.deleteQ'), () => DB.remove('polls/' + el.dataset.id)),
     vcat: (el) => { S.videoCat = el.dataset.c; render(true); },
-    play: (el) => playVideo(el.dataset.id),
+    play: (el) => playVideo(el.dataset.id, el.dataset.hw),
     'close-modal': (el, ev) => { if (ev.target === el) { const m = el.closest('.modal'); if (m) m.remove(); } },
     'del-video': (el) => confirmDo(t('vid.deleteQ'), () => DB.remove('videos/' + el.dataset.id)),
     'fee-toggle': (el) => { S.openFee = S.openFee === el.dataset.id ? null : el.dataset.id; render(true); },
@@ -758,12 +1147,64 @@
     },
     'fee-del': (el) => confirmDo(t('cash.deleteQ'), () => DB.remove('fees/' + el.dataset.id)),
     'stat-range': (el) => { S.statRange = el.dataset.r; render(true); },
-    approve: async (el) => { await DB.update('members/' + el.dataset.id, { status: 'active' }); await push([el.dataset.id], 'approved', { group: C.groupName || '' }, '#/termine'); toast(t('mem.approved')); },
+    approve: async (el) => { await DB.update('members/' + el.dataset.id, { status: 'active' }); await push([el.dataset.id], 'approved', { group: groupName() }, '#/termine'); toast(t('mem.approved')); },
     reject: (el) => confirmDo(t('mem.removeQ', { name: nameOf(el.dataset.id) }), () => DB.remove('members/' + el.dataset.id)),
     role: (el) => { const m = S.members.find((x) => x.id === el.dataset.id); return DB.update('members/' + m.id, { role: m.role === 'trainer' ? 'member' : 'trainer' }); },
+    // ----- v2 features
+    'cal-view': (el) => { S.calView = el.dataset.v; render(true); },
+    'cal-move': (el) => { const d = S.calMonth ? new Date(S.calMonth) : new Date(); d.setDate(1); d.setMonth(d.getMonth() + Number(el.dataset.d)); S.calMonth = d.getTime(); S.calDay = null; render(true); },
+    'cal-day': (el) => { S.calDay = S.calDay === el.dataset.k ? null : el.dataset.k; render(true); },
+    react: (el) => {
+      const path = el.dataset.p; const [col, id] = path.split('/');
+      const obj = (col === 'events' ? S.events : S.posts).find((x) => x.id === id) || {};
+      return DB.update(path, { ['react.' + uid()]: (obj.react || {})[uid()] === el.dataset.e ? DEL : el.dataset.e });
+    },
+    'cm-toggle': (el) => { const tg = el.dataset.t; if (S.openComments.has(tg)) S.openComments.delete(tg); else { S.openComments.add(tg); markComments(tg); } render(true); },
+    'cm-del': (el) => confirmDo(t('cm.deleteQ'), () => DB.remove('comments/' + el.dataset.id)),
+    'guest-del': async (el) => {
+      const ev = S.events.find((e) => e.id === el.dataset.id); if (!ev) return;
+      const host = el.dataset.h; const i = Number(el.dataset.i);
+      const before = rsvpLists(ev).confirmed;
+      const arr = ((ev.guests || {})[host] || []).filter((_, k) => k !== i);
+      await DB.update('events/' + ev.id, { ['guests.' + host]: arr.length ? arr : DEL });
+      await notifyPromoted(before, rsvpLists({ ...ev, guests: { ...(ev.guests || {}), [host]: arr } }).confirmed, ev);
+    },
+    'teams-n': (el) => { const ev = S.events.find((e) => e.id === el.dataset.id); const n = Number(el.dataset.n); S.teamDraft = { ev: ev.id, n, teams: drawTeams(playerPool(ev), n) }; render(true); },
+    'teams-draw': (el) => { const ev = S.events.find((e) => e.id === el.dataset.id); const n = Number(el.dataset.n); S.teamDraft = { ev: ev.id, n, teams: drawTeams(playerPool(ev), n) }; render(true); },
+    'teams-save': async (el) => {
+      const d = S.teamDraft; if (!d) return;
+      const teams = { n: d.n }; d.teams.forEach((tm, i) => { teams['t' + i] = tm.map((p) => p.k); });
+      const ev = S.events.find((e) => e.id === el.dataset.id);
+      await DB.update('events/' + el.dataset.id, { teams, teamsTs: Date.now() });
+      await push(rsvpLists(ev).confirmed, 'teams', evP(ev), '#/termin/' + ev.id);
+      S.teamDraft = null; toast(t('teams.saved')); go('#/termin/' + el.dataset.id);
+    },
+    skill: (el) => DB.set('private/skills', { s: { [el.dataset.u]: Number(el.dataset.n) } }, true),
+    'read-remind': async (el) => {
+      const p = S.posts.find((x) => x.id === el.dataset.id); const reads = p.reads || {};
+      const unread = activeMembers().filter((m) => m.id !== p.author && !reads[m.id]).map((m) => m.id);
+      await push(unread, 'readRemind', { heading: p.title || p.text.slice(0, 60) }, '#/news'); toast(t('ev.reminded', { n: unread.length }));
+    },
+    'hw-done': async (el) => {
+      const h = S.homework.find((x) => x.id === el.dataset.id); if (!h) return;
+      const done = h.done && h.done[uid()];
+      await DB.update('homework/' + h.id, { ['done.' + uid()]: done ? DEL : Date.now() });
+      if (el.dataset.close) { const m = el.closest('.modal'); if (m) m.remove(); }
+      if (!done) toast('✅ ' + t('hw.done'));
+    },
+    'hw-del': (el) => confirmDo(t('hw.deleteQ'), () => DB.remove('homework/' + el.dataset.id)),
+    'copy-text': async (el) => { try { await navigator.clipboard.writeText(el.dataset.text); toast('📋 ' + t('copied')); } catch (e) { window.prompt('', el.dataset.text); } },
+    'cal-newkey': () => confirmDo(t('abo.newKeyQ'), () => DB.set('settings/cal', { key: Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join(''), ts: Date.now() }, false)),
+    'goal-del': (el) => confirmDo(t('goal.deleteQ'), () => saveGoals(goalList().filter((g) => g.id !== el.dataset.id))),
+    'goal-step': (el) => saveGoals(goalList().map((g) => { if (g.id !== el.dataset.id) return g; const p = Math.max(0, (Number(g.progress) || 0) + Number(el.dataset.d)); return { ...g, progress: p, done: g.target ? p >= g.target : g.done }; })),
+    'goal-done': (el) => saveGoals(goalList().map((g) => (g.id === el.dataset.id ? { ...g, done: !g.done } : g))),
+    'goal-share': (el) => DB.set('goals/' + uid(), { list: goalList(), shared: el.checked, updated: Date.now() }, true),
+    preset: (el) => { const f = el.closest('form'); f.elements.c1.value = el.dataset.c1; f.elements.c2.value = el.dataset.c2; previewTheme(f); },
+    'logo-remove': (el) => { const f = el.closest('form'); f.elements.logoData.value = 'REMOVE'; f.querySelector('.logo-prev').innerHTML = `<span class="muted small">${t('design.noLogo')}</span>`; },
+    'design-reset': () => confirmDo(t('design.resetQ'), async () => { await DB.remove('settings/theme'); applyTheme(null); toast(t('saved')); go('#/mehr'); }),
     invite: async () => {
       const text = (I.ui[S.lang]['invite.text'] || I.ui.en['invite.text']).replace('{url}', appUrl());
-      if (navigator.share) { try { await navigator.share({ title: C.groupName, text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+      if (navigator.share) { try { await navigator.share({ title: groupName(), text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
       window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
     }
   };
@@ -779,11 +1220,11 @@
       let end = new Date(e.date.value + 'T' + (e.to.value || e.from.value));
       if (end <= start) end = new Date(start.getTime() + 2 * 3600e3);
       const plan = [...f.querySelectorAll('.plan-row')].map((r) => ({ text: r.querySelector('[name=ptext]').value.trim(), video: r.querySelector('[name=pvideo]').value })).filter((p) => p.text || p.video);
-      const data = { title: e.title.value.trim(), place: e.place.value.trim(), limit: Math.max(0, Number(e.limit.value) || 0), notes: e.notes.value.trim(), plan, carpool: e.carpool.checked, updated: Date.now() };
+      const data = { title: e.title.value.trim(), place: e.place.value.trim(), limit: Math.max(0, Number(e.limit.value) || 0), notes: e.notes.value.trim(), plan, carpool: e.carpool.checked, minPlayers: Math.max(0, Number(e.minPlayers.value) || 0), minHours: Number(e.minHours.value) || 4, fb: e.fb.checked, updated: Date.now() };
       if (ev) {
         const before = rsvpLists(ev).confirmed;
         const upd = { ...data, start: start.getTime(), end: end.getTime() };
-        if (upd.start !== ev.start) upd.reminderSent = false;
+        if (upd.start !== ev.start) { upd.reminderSent = false; upd.minAlertSent = false; upd.fbAsked = false; }
         await DB.update('events/' + id, upd);
         const merged = { ...ev, ...upd };
         await notifyPromoted(before, rsvpLists(merged).confirmed, merged);
@@ -841,6 +1282,58 @@
       }
       toast(t('saved')); go('#/videos');
     },
+    // ----- v2 forms
+    async comment(f) {
+      const text = f.elements.text.value.trim(); if (!text) return;
+      const target = f.dataset.t;
+      await DB.add('comments', { target, text, author: uid(), authorName: S.me.name, ts: Date.now() });
+      f.elements.text.value = ''; markComments(target);
+      if (target.startsWith('posts/')) { const p = S.posts.find((x) => 'posts/' + x.id === target); if (p && p.author !== uid()) await push([p.author], 'comment', { name: S.me.name, text: text.slice(0, 160) }, '#/news'); }
+      render(true);
+    },
+    async guest(f) {
+      const ev = S.events.find((e) => e.id === f.dataset.id); if (!ev) return;
+      const arr = [...((ev.guests || {})[uid()] || []), { n: f.elements.name.value.trim(), t: Date.now(), trial: f.elements.trial.checked }];
+      await DB.update('events/' + ev.id, { ['guests.' + uid()]: arr });
+      toast(t('guest.saved')); go('#/termin/' + ev.id);
+    },
+    async feedback(f) {
+      const e = f.elements; const evId = f.dataset.id; const anon = e.anon.checked;
+      const data = { event: evId, stars: Number(f.querySelector('input[name=stars]:checked').value), text: e.text.value.trim(), anon, ts: Date.now() };
+      if (!anon) { data.by = uid(); data.name = S.me.name; }
+      await DB.set('feedback/' + fbId(evId), data, false);
+      store.set('vb-fb-' + evId, '1'); toast(t('fb.thanks')); render(true);
+    },
+    async prefs(f) {
+      const on = new Set([...f.querySelectorAll('input[name=cat]:checked')].map((i) => i.value));
+      const off = PUSH_CATS.filter((c) => !on.has(c) && (c !== 'coach' || isTrainer()));
+      await DB.set('prefs/' + uid(), { off, quiet: { on: f.elements.qon.checked, from: Number(f.elements.qfrom.value), to: Number(f.elements.qto.value) }, updated: Date.now() }, false);
+      toast(t('saved')); go('#/mehr');
+    },
+    async goal(f) {
+      const text = f.elements.text.value.trim(); if (!text) return;
+      const target = Math.max(0, Number(f.elements.target.value) || 0);
+      await saveGoals([...goalList(), { id: 'g' + Date.now().toString(36), text, target, progress: 0, done: false, ts: Date.now() }]);
+      f.elements.text.value = ''; f.elements.target.value = ''; render(true);
+    },
+    async design(f) {
+      const e = f.elements; const old = S.theme || {};
+      let logo = old.logo || '';
+      if (e.logo.files && e.logo.files[0]) logo = await resizeImage(e.logo.files[0], 256);
+      else if (e.logoData.value === 'REMOVE') logo = '';
+      const th = { name: e.name.value.trim(), c1: e.c1.value, c2: e.c2.value, logo, ts: Date.now() };
+      await DB.set('settings/theme', th, false);
+      applyTheme(th); toast(t('saved')); go('#/mehr');
+    },
+    async homework(f) {
+      const e = f.elements; const toSome = f.querySelector('input[name=to]:checked').value === 'some';
+      const who = [...f.querySelectorAll('input[name=who]:checked')].map((i) => i.value);
+      if (toSome && !who.length) throw new Error(t('hw.pickSome'));
+      const v = S.videos.find((x) => x.id === e.video.value);
+      await DB.add('homework', { video: e.video.value, note: e.note.value.trim(), due: e.due.value || '', to: toSome ? who : 'all', done: {}, by: uid(), ts: Date.now() });
+      if (e.push.checked) await push(toSome ? who : 'all', 'homework', { text: v ? v.title : '' }, '#/videos');
+      toast(t('hw.created')); go('#/videos');
+    },
     async fee(f) {
       const e = f.elements; const amount = Number(e.amount.value) || 0;
       await DB.add('fees', { title: e.title.value.trim(), amount, due: e.due.value || '', ts: Date.now() });
@@ -848,6 +1341,17 @@
       toast(t('feef.created')); go('#/kasse');
     }
   };
+  const goalList = () => ((S.goals && S.goals.list) || []).slice();
+  const saveGoals = (list) => DB.set('goals/' + uid(), { list, shared: !!(S.goals && S.goals.shared), updated: Date.now() }, true);
+  function resizeImage(file, max) {
+    return new Promise((resolve, reject) => {
+      const img = new Image(); const url = URL.createObjectURL(file);
+      img.onload = () => { const sc = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); resolve(c.toDataURL('image/png')); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(t('design.badImage'))); };
+      img.src = url;
+    });
+  }
+  function previewTheme(f) { S.previewing = true; applyTheme({ ...(S.theme || {}), c1: f.elements.c1.value, c2: f.elements.c2.value }, true); }
   async function notifyNew(name) { try { await DB.add('outbox', { to: 'trainers', k: 'signup', p: { name }, link: '#/mitglieder', from: uid(), ts: Date.now() }); kickPush(); } catch (e) { /* */ } }
 
   document.addEventListener('click', async (ev) => {
@@ -862,6 +1366,10 @@
     ev.preventDefault();
     const btn = f.querySelector('button:not([type=button])'); if (btn) btn.disabled = true;
     try { await FORMS[f.dataset.f](f); } catch (e) { toast('⚠️ ' + esc(errMsg(e)), 'err'); console.error(e); } finally { if (btn && btn.isConnected) btn.disabled = false; }
+  });
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'q') { S.q = e.target.value; const r = $('#results'); if (r) r.innerHTML = searchResults(); }
+    if (e.target.form && e.target.form.dataset.f === 'design' && e.target.type === 'color') previewTheme(e.target.form);
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const m = $('.modal'); if (m) m.remove(); } });
   window.addEventListener('hashchange', () => { S.navCount++; const m = $('.modal'); if (m) m.remove(); render(true); });
@@ -884,12 +1392,13 @@
     S.ready = true;
     window.addEventListener('demo-push', (e) => {
       const d = e.detail || {};
-      const who = d.to === 'all' ? t('msg.all').replace(/^\S+\s/, '') : d.to === 'trainers' ? t('msg.coaches').replace(/^\S+\s/, '') : Array.isArray(d.to) ? d.to.map(nameOf).join(', ') : '';
+      const who = d.to === 'all' ? t('demo.all') : d.to === 'trainers' ? t('demo.coaches') : Array.isArray(d.to) ? d.to.map(nameOf).join(', ') : '';
       const [title, body] = demoPushText(d);
       toast(`<small>📲 ${t('demo.pushTo', { who })}</small><br><b>${esc(title)}</b><br>${esc(body)}`, 'push');
     });
     DB.onForegroundMessage((n) => toast(`<b>🔔 ${esc(n.title || '')}</b><br>${esc(n.body || '')}`, 'push'));
     DB.onAuth(onAuth);
+    DB.watchDoc('settings/theme', (th) => { applyTheme(th); schedule(); });
     if ('serviceWorker' in navigator && !C.noServiceWorker && /^https?:$/.test(location.protocol)) {
       navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW', e));
     }
