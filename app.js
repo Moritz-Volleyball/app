@@ -14,7 +14,8 @@
     installEvt: null, pushDismissed: false, openFee: null, navCount: 0,
     lang: null, langPicker: false,
     comments: [], homework: [], feedback: [], cal: null, skills: {}, prefs: null, goals: null, theme: null,
-    calView: 'list', calMonth: null, calDay: null, openComments: new Set(), teamDraft: null, q: '', pendingRender: false
+    calView: 'list', calMonth: null, calDay: null, openComments: new Set(), teamDraft: null, q: '', pendingRender: false,
+    tournaments: [], tourTab: 'plan', rulesTab: 'rules'
   };
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -76,6 +77,14 @@
   const fnv = (str) => { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
   const fbId = (evId) => evId + '_' + fnv(uid() + '|' + evId) + fnv(evId + '|' + uid());
   const REACTIONS = ['👍', '❤️', '😂', '🔥', '🏐'];
+  const memberOf = (id) => (id === uid() && S.me ? S.me : S.members.find((x) => x.id === id));
+  // Away / holidays: periods {f, t} in milliseconds (start of first day – end of last day)
+  const awayOf = (m) => (m && Array.isArray(m.away) ? m.away.filter((a) => a && a.f && a.t) : []);
+  const isAwayAt = (id, ts) => awayOf(memberOf(id)).some((a) => a.f <= ts && ts <= a.t);
+  // Preferred positions (max. 2): Setter, Outside hitter, Middle blocker, Opposite, Libero
+  const POS = ['S', 'OH', 'MB', 'OPP', 'L'];
+  const posOf = (id) => { const m = memberOf(id); return m && Array.isArray(m.pos) ? m.pos.filter((p) => POS.includes(p)).slice(0, 2) : []; };
+  const posTag = (list) => (list.length ? ` <small class="pos">${list.map((x) => t('pos.s.' + x)).join('/')}</small>` : '');
 
   // Seen timestamps (unread counters) – per device
   let SEEN = null;
@@ -141,14 +150,17 @@
     const waitlist = waitE.filter((e) => e.m).map((e) => e.k);
     const no = Object.entries(r).filter(([, v]) => v && v.s === 'no').map(([k]) => k);
     const answered = new Set(Object.keys(r));
-    const open = activeMembers().map((m) => m.id).filter((id) => !answered.has(id));
-    return { confirmed, waitlist, no, open, lim, guestsIn: inE.filter((e) => !e.m), guestsWait: waitE.filter((e) => !e.m), total: inE.length, waitTotal: waitE.length };
+    const notAnswered = activeMembers().map((m) => m.id).filter((id) => !answered.has(id));
+    const away = notAnswered.filter((id) => isAwayAt(id, ev.start));
+    const open = notAnswered.filter((id) => !away.includes(id));
+    return { confirmed, waitlist, no, open, away, lim, guestsIn: inE.filter((e) => !e.m), guestsWait: waitE.filter((e) => !e.m), total: inE.length, waitTotal: waitE.length };
   }
   function myStatus(ev) {
     const l = rsvpLists(ev); const me = uid();
     if (l.confirmed.includes(me)) return { k: 'yes', label: t('st.yes') };
     const w = l.waitlist.indexOf(me); if (w >= 0) return { k: 'wait', label: t('st.wait', { n: w + 1 }) };
     if (l.no.includes(me)) return { k: 'no', label: t('st.no') };
+    if (l.away.includes(me)) return { k: 'away', label: t('st.away') };
     return { k: 'open', label: t('st.open') };
   }
   // Push: stored as key + parameters, the sender translates per recipient language
@@ -167,14 +179,22 @@
     const promoted = after.filter((x) => !before.includes(x) && x !== uid());
     if (promoted.length) await push(promoted, 'promoted', evP(ev), '#/termin/' + ev.id);
   }
+  // "Spot free" alert: the session was full, now a spot is free and nobody is waiting → tell everyone who hasn't replied
+  async function notifySpotFree(beforeL, nextEv) {
+    const a = rsvpLists(nextEv);
+    if (!a.lim || nextEv.cancelled || nextEv.start < Date.now() || beforeL.total < a.lim || a.total >= a.lim || a.waitTotal) return;
+    const to = a.open.filter((x) => x !== uid());
+    if (to.length) await push(to, 'spotFree', { ...evP(nextEv), n: a.lim - a.total }, '#/termin/' + nextEv.id);
+  }
   async function setRsvp(id, s) {
     const ev = S.events.find((e) => e.id === id); if (!ev) return;
     const cur = (ev.rsvp || {})[uid()];
     const entry = s === 'yes' ? { s: 'yes', t: cur && cur.s === 'yes' ? cur.t : Date.now() } : { s: 'no', t: Date.now() };
-    const before = rsvpLists(ev).confirmed;
+    const beforeL = rsvpLists(ev); const before = beforeL.confirmed;
     const nextEv = { ...ev, rsvp: { ...(ev.rsvp || {}), [uid()]: entry } };
     await DB.update('events/' + id, { ['rsvp.' + uid()]: entry });
     await notifyPromoted(before, rsvpLists(nextEv).confirmed, ev);
+    await notifySpotFree(beforeL, nextEv);
     const st = myStatus(nextEv);
     toast(s === 'yes' ? (st.k === 'wait' ? t('rsvp.wait', { status: st.label }) : t('rsvp.yes')) : t('rsvp.no'));
   }
@@ -201,7 +221,7 @@
     unsub(S.dataSubs); S.dataKey = key;
     const w = (n, k) => S.dataSubs.push(DB.watchCol(n, (d) => { S[k] = d; schedule(); }));
     w('members', 'members'); w('events', 'events'); w('posts', 'posts'); w('polls', 'polls'); w('videos', 'videos'); w('fees', 'fees');
-    w('comments', 'comments'); w('homework', 'homework');
+    w('comments', 'comments'); w('homework', 'homework'); w('tournaments', 'tournaments');
     const d = (path, fn) => S.dataSubs.push(DB.watchDoc(path, (x) => { fn(x); schedule(); }));
     d('settings/cal', (x) => { S.cal = x; });
     d('prefs/' + uid(), (x) => { S.prefs = x; });
@@ -211,7 +231,7 @@
   }
   function onAuth(u) {
     unsub(S.authSubs); unsub(S.dataSubs); S.dataKey = ''; clearDocs();
-    Object.assign(S, { user: u, me: undefined, members: [], events: [], posts: [], polls: [], videos: [], fees: [], payments: [], inbox: [], myPay: null, comments: [], homework: [], feedback: [], cal: null, skills: {}, prefs: null, goals: null });
+    Object.assign(S, { user: u, me: undefined, members: [], events: [], posts: [], polls: [], videos: [], fees: [], payments: [], inbox: [], myPay: null, comments: [], homework: [], feedback: [], cal: null, skills: {}, prefs: null, goals: null, tournaments: [] });
     if (u) {
       S.authSubs.push(DB.watchDoc('members/' + u.uid, (m) => {
         const prev = S.me;
@@ -229,7 +249,7 @@
   }
 
   // ---------------------------------------------------------- Rendering
-  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt', 'gast', 'aufgabe-neu', 'design', 'push-prefs']);
+  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt', 'gast', 'aufgabe-neu', 'design', 'push-prefs', 'turnier-neu', 'spiel', 'timer', 'abwesend']);
   let lastKey = '', rq = false;
   const schedule = () => { if (rq) return; rq = true; requestAnimationFrame(() => { rq = false; render(false); }); };
   // Don't redraw while someone is typing into an inline field (comment, goal, search)
@@ -271,14 +291,15 @@
     ['news', '📣', 'tab.news', ['news', 'nachricht']],
     ['umfragen', '📊', 'tab.polls', ['umfragen', 'umfrage-neu']],
     ['videos', '🎬', 'tab.videos', ['videos', 'video-neu', 'video-edit', 'aufgabe-neu']],
-    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install', 'kalender-abo', 'push-prefs', 'ziele', 'design', 'suche']]
+    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install', 'kalender-abo', 'push-prefs', 'ziele', 'design', 'suche', 'turniere', 'turnier', 'turnier-neu', 'spiel', 'timer', 'regeln', 'abwesend']]
   ];
   const VIEWS = {
     termine: viewTermine, termin: viewTermin, 'termin-neu': viewTerminForm, 'termin-edit': viewTerminForm, anwesenheit: viewAnwesenheit, fahrt: viewFahrt,
     news: viewNews, nachricht: viewNachricht, umfragen: viewUmfragen, 'umfrage-neu': viewUmfrageForm,
     videos: viewVideos, 'video-neu': viewVideoForm, 'video-edit': viewVideoForm,
     mehr: viewMehr, kasse: viewKasse, 'beitrag-neu': viewBeitragForm, statistik: viewStatistik, mitglieder: viewMitglieder, postfach: viewPostfach, profil: viewProfil, install: viewInstall,
-    gast: viewGast, teams: viewTeams, 'aufgabe-neu': viewAufgabeForm, 'kalender-abo': viewKalenderAbo, 'push-prefs': viewPushPrefs, ziele: viewZiele, design: viewDesign, suche: viewSuche
+    gast: viewGast, teams: viewTeams, 'aufgabe-neu': viewAufgabeForm, 'kalender-abo': viewKalenderAbo, 'push-prefs': viewPushPrefs, ziele: viewZiele, design: viewDesign, suche: viewSuche,
+    turniere: viewTurniere, turnier: viewTurnier, 'turnier-neu': viewTurnierForm, spiel: viewSpiel, timer: viewTimer, regeln: viewRegeln, abwesend: viewAbwesend
   };
   const curFlag = () => (I.langs.find((l) => l.code === S.lang) || I.langs[0]).flag;
   function shell(r, id) {
@@ -391,11 +412,13 @@
     const open = up.filter((e) => !e.cancelled && myStatus(e).k === 'open').length;
     const fb = feedbackDue();
     const seg = `<div class="seg"><button class="${S.calView === 'list' ? 'on' : ''}" data-a="cal-view" data-v="list">☰ ${t('cal.list')}</button><button class="${S.calView === 'month' ? 'on' : ''}" data-a="cal-view" data-v="month">🗓 ${t('cal.month')}</button></div>`;
+    const myAway = awayOf(S.me).filter((a) => a.t >= now).sort((a, b) => a.f - b.f)[0];
+    const awayBanner = myAway && myAway.f - now < 14 * 864e5 ? `<a class="banner awayb" href="#/abwesend"><div><b>🏖️ ${myAway.f <= now ? t('away.bannerNow', { date: F_.dm.format(myAway.t) }) : t('away.bannerSoon', { a: F_.dm.format(myAway.f), b: F_.dm.format(myAway.t) })}</b><br><span class="small">${t('away.bannerSub')}</span></div><span class="chev">›</span></a>` : '';
     const fbBanner = fb ? `<a class="banner fbb" href="#/termin/${fb.id}"><div><b>${t('fb.bannerT')}</b><br><span class="small">${esc(fb.title)} · ${esc(whenTxt(fb.start))}</span></div><span class="stars-mini">☆☆☆☆☆</span></a>` : '';
     return {
       title: t('ev.title'),
       action: isTrainer() ? `<a class="btn sm" href="#/termin-neu">${t('ev.add')}</a>` : '',
-      html: `${pushBanner()}${fbBanner}${seg}
+      html: `${pushBanner()}${awayBanner}${fbBanner}${seg}
         ${open ? `<div class="hint">${t('ev.openHint', { n: open })}</div>` : ''}
         ${S.calView === 'month' ? monthView(sorted) : `
         ${up.length ? up.map(evCard).join('') : `<div class="empty">${t('ev.none')}${isTrainer() ? `<br><a class="btn" href="#/termin-neu">${t('ev.first')}</a>` : ''}</div>`}
@@ -424,7 +447,12 @@
       <div class="cal-legend small muted"><span><i class="dt y"></i>${t('st.yes')}</span><span><i class="dt o"></i>${t('st.open')}</span><span><i class="dt n"></i>${t('st.no')}</span><span><i class="dt c"></i>${t('cal.cancelled')}</span></div></div>
       ${sel ? sel.map(evCard).join('') : `<p class="center-text small muted">${t('cal.tapDay')}</p>`}`;
   }
-  const chips = (ids, cls = '') => (ids.length ? ids.map((id) => `<span class="chip ${cls}">${esc(nameOf(id))}</span>`).join('') : '<span class="muted small">–</span>');
+  const chips = (ids, cls = '', withPos) => (ids.length ? ids.map((id) => `<span class="chip ${cls}">${esc(nameOf(id))}${withPos ? posTag(posOf(id)) : ''}</span>`).join('') : '<span class="muted small">–</span>');
+  function posSummary(ids) {
+    const c = {}; ids.forEach((id) => { const p = posOf(id)[0] || '?'; c[p] = (c[p] || 0) + 1; });
+    const parts = POS.filter((p) => c[p]).map((p) => `${t('pos.s.' + p)} ${c[p]}`);
+    return parts.length ? `<div class="small muted possum">🏐 ${parts.join(' · ')}${c['?'] ? ' · ? ' + c['?'] : ''}</div>` : '';
+  }
   function guestChips(list, cls) {
     return list.map((g) => `<span class="chip ${cls} guest">${esc(g.name)}${g.trial ? ' 🆕' : ''} <small>(${t('guest.of', { name: nameOf(g.host) })})</small>${g.host === uid() || isTrainer() ? `<button class="chip-x" data-a="guest-del" data-id="${g.evId}" data-h="${g.host}" data-i="${g.i}" aria-label="${t('remove')}">✕</button>` : ''}</span>`).join('');
   }
@@ -483,17 +511,20 @@
     </div>`;
     if (past && !ev.cancelled && ev.fb !== false && l.confirmed.includes(uid()) && (ev.end || ev.start) > now - 7 * 864e5) html += feedbackCard(ev);
     html += `<div class="card"><h3>${t('ev.participants')}</h3>
-      <div class="grp"><div class="gl">${t('ev.confirmed', { n: l.total + (l.lim ? '/' + l.lim : '') })}</div>${chips(l.confirmed, 'ok')}${guestChips(gIn, 'ok')}</div>
+      <div class="grp"><div class="gl">${t('ev.confirmed', { n: l.total + (l.lim ? '/' + l.lim : '') })}</div>${chips(l.confirmed, 'ok', true)}${guestChips(gIn, 'ok')}${posSummary(l.confirmed)}</div>
       ${l.waitTotal ? `<div class="grp"><div class="gl">${t('ev.waitlist', { n: l.waitTotal })}</div>${l.waitlist.map((x, i) => `<span class="chip wait">${i + 1}. ${esc(nameOf(x))}</span>`).join('')}${guestChips(gWait, 'wait')}</div>` : ''}
       <div class="grp"><div class="gl">${t('ev.declined', { n: l.no.length })}</div>${chips(l.no, 'no')}</div>
       ${!past ? `<div class="grp"><div class="gl">${t('ev.noReply', { n: l.open.length })}</div>${chips(l.open)}</div>` : ''}
+      ${!past && l.away.length ? `<div class="grp"><div class="gl">${t('away.group', { n: l.away.length })}</div>${chips(l.away, 'away')}</div>` : ''}
       ${ev.attendanceDone ? `<div class="grp"><div class="gl">${t('ev.attended', { n: attended.length })}</div>${chips(attended, 'ok')}</div>` : ''}
       ${!past && !ev.cancelled ? `<a class="btn sm ghost" href="#/gast/${ev.id}">${t('guest.add')}</a>` : ''}
     </div>`;
     const teams = ev.teams && ev.teams.n ? ev.teams : null;
     if (teams || (isTrainer() && !past && !ev.cancelled)) {
       html += `<div class="card"><h3>${t('teams.title')}</h3>${teams ? teamsHtml(Array.from({ length: teams.n }, (_, i) => teams['t' + i] || []), false) : `<p class="muted small">${t('teams.none')}</p>`}
-        ${isTrainer() ? `<a class="btn sm ghost" href="#/teams/${ev.id}">${teams ? t('teams.redo') : t('teams.draw')}</a>` : ''}</div>`;
+        <div class="row wrap-row">${isTrainer() ? `<a class="btn sm ghost" href="#/teams/${ev.id}">${teams ? t('teams.redo') : t('teams.draw')}</a>` : ''}
+        ${S.tournaments.filter((x) => x.ev === ev.id).map((x) => `<a class="btn sm" href="#/turnier/${x.id}">🏆 ${esc(x.name)}</a>`).join('')}
+        ${isTrainer() && teams && !S.tournaments.some((x) => x.ev === ev.id) ? `<a class="btn sm ghost" href="#/turnier-neu/${ev.id}">🏆 ${t('tour.fromTeams')}</a>` : ''}</div></div>`;
     }
     if (plan.length) {
       html += `<div class="card"><h3>${t('ev.planT')}</h3><ol class="plan">${plan.map((p) => {
@@ -534,16 +565,19 @@
   // ---------- Teams
   function playerPool(ev) {
     const l = rsvpLists(ev);
-    return l.confirmed.map((k) => ({ k, name: nameOf(k), s: Number(S.skills[k]) || 3 })).concat(l.guestsIn.map((g) => ({ k: g.k, name: g.name + ' (G)', s: g.trial ? 2 : 3 })));
+    return l.confirmed.map((k) => ({ k, name: nameOf(k), s: Number(S.skills[k]) || 3, r: posOf(k)[0] || '' })).concat(l.guestsIn.map((g) => ({ k: g.k, name: g.name + ' (G)', s: g.trial ? 2 : 3, r: '' })));
   }
+  // Setters (and other positions) are spread first; swaps only between players of the same position
+  const ROLE_ORDER = ['S', 'L', 'MB', 'OPP', 'OH', ''];
   function drawTeams(pool, n) {
-    const arr = pool.map((p) => ({ ...p, r: Math.random() })).sort((a, b) => b.s - a.s || a.r - b.r);
+    const arr = pool.map((p) => ({ ...p, r: p.r || '', rnd: Math.random() })).sort((a, b) => ROLE_ORDER.indexOf(a.r) - ROLE_ORDER.indexOf(b.r) || b.s - a.s || a.rnd - b.rnd);
     const teams = Array.from({ length: n }, () => []);
     arr.forEach((p, i) => { const round = Math.floor(i / n); const pos = i % n; teams[round % 2 ? n - 1 - pos : pos].push(p); });
     const sum = (tm) => tm.reduce((s, p) => s + p.s, 0);
     for (let it = 0; it < 200; it++) { // small swaps to even out strength
       const a = Math.floor(Math.random() * n), b = Math.floor(Math.random() * n); if (a === b || !teams[a].length || !teams[b].length) continue;
       const i = Math.floor(Math.random() * teams[a].length), j = Math.floor(Math.random() * teams[b].length);
+      if (teams[a][i].r !== teams[b][j].r) continue;
       const before = Math.abs(sum(teams[a]) - sum(teams[b]));
       const after = Math.abs(sum(teams[a]) - teams[a][i].s + teams[b][j].s - (sum(teams[b]) - teams[b][j].s + teams[a][i].s));
       if (after < before) { const x = teams[a][i]; teams[a][i] = teams[b][j]; teams[b][j] = x; }
@@ -554,7 +588,7 @@
   function teamsHtml(teams, showSkill) {
     return `<div class="teams">${teams.map((tm, i) => {
       const players = tm.map((p) => (typeof p === 'string' ? { k: p, name: p.startsWith('g:') ? (guestName(p) || '?') + ' (G)' : nameOf(p), s: Number(S.skills[p]) || 3 } : p));
-      return `<div class="team" style="--tc:${TEAM_COLORS[i % 4]}"><b>${t('teams.team', { n: i + 1 })}${showSkill ? ` <small>★ ${players.reduce((s, p) => s + p.s, 0)}</small>` : ''}</b>${players.map((p) => `<span>${esc(p.name)}${showSkill ? ` <small>${'★'.repeat(p.s)}</small>` : ''}</span>`).join('')}</div>`;
+      return `<div class="team" style="--tc:${TEAM_COLORS[i % 4]}"><b>${t('teams.team', { n: i + 1 })}${showSkill ? ` <small>★ ${players.reduce((s, p) => s + p.s, 0)}</small>` : ''}</b>${players.map((p) => `<span>${esc(p.name)}${p.k && !p.k.startsWith('g:') ? posTag(posOf(p.k)) : ''}${showSkill ? ` <small>${'★'.repeat(p.s)}</small>` : ''}</span>`).join('')}</div>`;
     }).join('')}</div>`;
   }
   function guestName(k) { const [, host, i] = k.split(':'); for (const e of S.events) { const g = ((e.guests || {})[host] || [])[Number(i)]; if (g) return g.n; } return ''; }
@@ -757,17 +791,21 @@
   }
   function viewVideos() {
     const cats = [...new Set(S.videos.map((v) => v.category).filter(Boolean))];
-    const list = S.videos.filter((v) => S.videoCat === '*' || v.category === S.videoCat).sort((a, b) => b.ts - a.ts);
+    const favN = (v) => Object.keys(v.fav || {}).filter((k) => v.fav[k]).length;
+    const isFav = (v) => !!(v.fav && v.fav[uid()]);
+    const vc = S.videoCat;
+    const list = S.videos.filter((v) => (vc === '*' ? true : vc === '♥' ? isFav(v) : vc === '🔥' ? favN(v) > 0 : v.category === vc))
+      .sort((a, b) => (vc === '🔥' ? favN(b) - favN(a) : 0) || b.ts - a.ts);
     const chip = (c, label) => `<button class="chip ${S.videoCat === c ? 'on' : ''}" data-a="vcat" data-c="${esc(c)}">${esc(label)}</button>`;
     return {
       title: t('vid.title'), action: isTrainer() ? `<a class="btn sm" href="#/video-neu">${t('vid.add')}</a>` : '',
-      html: `${homeworkCards()}<div class="chips-row">${chip('*', t('vid.all'))}${cats.map((c) => chip(c, c)).join('')}</div>
+      html: `${homeworkCards()}<div class="chips-row">${chip('*', t('vid.all'))}${chip('♥', '★ ' + t('fav.mine'))}${chip('🔥', '🔥 ' + t('fav.top'))}${cats.map((c) => chip(c, c)).join('')}</div>
         ${list.length ? `<div class="vgrid">${list.map((v) => {
           const y = ytId(v.url);
           return `<div class="vcard"><button class="thumb" data-a="play" data-id="${v.id}" aria-label="${t('vid.play')}">${y ? `<img loading="lazy" src="https://i.ytimg.com/vi/${y}/hqdefault.jpg" alt="">` : ''}<span class="play">▶</span></button>
-            <div class="vbody"><span class="tag">${esc(v.category || t('vid.general'))}</span>${v.ts > PREV.videos && v.by !== uid() ? ` <span class="tag newt">${t('unread.newTag')}</span>` : ''}<h4>${esc(v.title)}</h4>${v.description ? `<p class="small muted">${esc(v.description)}</p>` : ''}
+            <div class="vbody"><button class="favbtn ${isFav(v) ? 'on' : ''}" data-a="fav" data-id="${v.id}" aria-label="${t('fav.toggle')}" title="${t('fav.toggle')}">${isFav(v) ? '★' : '☆'}${favN(v) ? `<b>${favN(v)}</b>` : ''}</button><span class="tag">${esc(v.category || t('vid.general'))}</span>${v.ts > PREV.videos && v.by !== uid() ? ` <span class="tag newt">${t('unread.newTag')}</span>` : ''}<h4>${esc(v.title)}</h4>${v.description ? `<p class="small muted">${esc(v.description)}</p>` : ''}
             ${isTrainer() ? `<div class="row wrap-row"><a class="link sm" href="#/aufgabe-neu/${v.id}">📚 ${t('hw.assign')}</a><a class="link sm" href="#/video-edit/${v.id}">${t('vid.edit')}</a><button class="link sm red" data-a="del-video" data-id="${v.id}">${t('delete')}</button></div>` : ''}</div></div>`;
-        }).join('')}</div>` : `<div class="empty">${t('vid.none')}</div>`}`
+        }).join('')}</div>` : `<div class="empty">${vc === '♥' ? t('fav.none') : t('vid.none')}</div>`}`
     };
   }
   function viewVideoForm(id) {
@@ -840,6 +878,10 @@
           ${item('#/push-prefs', '🔔', t('more.push'), pushTxt)}
           ${item('#/kalender-abo', '📆', t('abo.title'), t('abo.sub'))}
           ${item('#/ziele', '🎯', t('goal.title'), t('goal.sub'))}
+          ${item('#/abwesend', '🏖️', t('away.title'), awayOf(S.me).some((a) => a.t >= Date.now()) ? t('away.subOn') : t('away.sub'))}
+          ${item('#/turniere', '🏆', t('tour.title'), t('tour.sub'))}
+          ${item('#/timer', '⏱️', t('timer.title'), t('timer.sub'))}
+          ${item('#/regeln', '📖', t('rules.title'), t('rules.sub'))}
           ${!isStandalone() ? item('#/install', '📲', t('more.install'), t('more.installSub')) : ''}
           ${item('#/nachricht/trainer', '✉️', t('more.toCoach'), t('more.toCoachSub'))}
           ${item('#/kasse', '💶', t('more.cash'), tr ? t('more.cashCoach') : t('more.cashMember'))}
@@ -852,11 +894,14 @@
           ${item('#/design', '🎨', t('design.title'), t('design.sub'))}
         </div>` : ''}
         <div class="menu">${DB.demo ? item('#/mehr', '🔄', t('more.demoSwitch'), '', 0, 'demo-switch') + item('#/mehr', '♻️', t('demo.reset'), '', 0, 'demo-reset') : item('#/mehr', '🚪', t('logout'), '', 0, 'logout')}</div>
-        <p class="center-text small muted">${esc(C.appName || 'Volleyball')} · ${t('publisher', { name: C.publisher || '' })}<br>${t('more.version', { v: '1.1' })}</p>`
+        <p class="center-text small muted">${esc(C.appName || 'Volleyball')} · ${t('publisher', { name: C.publisher || '' })}<br>${t('more.version', { v: '3.0' })}</p>`
     };
   }
   function viewProfil() {
-    return { title: t('profile.title'), back: '#/mehr', html: `<form class="card" data-f="profile"><label>${t('f.name')}<input name="name" required maxlength="40" value="${esc(S.me.name)}"></label><button class="btn block">${t('evf.save')}</button></form>${S.user.email ? `<p class="muted small center-text">${t('profile.as', { email: S.user.email })}</p>` : ''}` };
+    const mine = posOf(uid());
+    return { title: t('profile.title'), back: '#/mehr', html: `<form class="card" data-f="profile"><label>${t('f.name')}<input name="name" required maxlength="40" value="${esc(S.me.name)}"></label>
+      <fieldset><legend>${t('pos.legend')}</legend><p class="small muted">${t('pos.hint')}</p>
+        <div class="posgrid">${POS.map((p) => `<label class="check line"><input type="checkbox" name="pos" value="${p}" ${mine.includes(p) ? 'checked' : ''}> <b>${t('pos.s.' + p)}</b> ${t('pos.' + p)}</label>`).join('')}</div></fieldset><button class="btn block">${t('evf.save')}</button></form>${S.user.email ? `<p class="muted small center-text">${t('profile.as', { email: S.user.email })}</p>` : ''}` };
   }
   function viewInstall() {
     const iosSteps = `<ol class="steps">${t('inst.ios')}</ol><p class="small muted">${t('inst.iosNote')}</p>`;
@@ -968,6 +1013,339 @@
     if (!groups.length) return `<div class="empty">${t('search.none')}</div>`;
     return groups.map(([g, l]) => `<h4 class="sec">${esc(g)} (${l.length})</h4><div class="menu">${l.slice(0, 20).map(([href, a, b]) => `<a class="mitem" href="${href}"><span class="ml">${esc(a)}${b ? `<small>${esc(b)}</small>` : ''}</span><span class="chev">›</span></a>`).join('')}</div>`).join('');
   }
+  // ---------------------------------------------------------- v3: Away / holidays
+  const dayStart = (v) => new Date(v + 'T00:00:00').getTime();
+  const dayEnd = (v) => new Date(v + 'T23:59:59').getTime() + 999;
+  function viewAbwesend() {
+    const now = Date.now();
+    const list = awayOf(S.me).map((a, i) => ({ ...a, i })).sort((a, b) => a.f - b.f);
+    const fmt = (a) => (toDateInput(a.f) === toDateInput(a.t) ? F_.dm.format(a.f) : F_.dm.format(a.f) + ' – ' + F_.dm.format(a.t));
+    return {
+      title: t('away.title'), back: '#/mehr',
+      html: `<form class="card" data-f="away"><p class="muted small">${t('away.text')}</p>
+          <div class="grid3 dates"><label>${t('away.from')}<input name="f" type="date" required value="${toDateInput(now)}"></label><label>${t('away.to')}<input name="t" type="date" required value="${toDateInput(now + 7 * 864e5)}"></label></div>
+          <label>${t('away.note')}<input name="note" maxlength="60" placeholder="${t('away.notePh')}"></label>
+          <button class="btn block">${t('away.add')}</button></form>
+        ${list.length ? list.map((a) => `<div class="card mrow ${a.t < now ? 'past' : ''}"><div><b>🏖️ ${esc(fmt(a))}</b>${a.f <= now && now <= a.t ? ` <span class="tag blue">${t('away.now')}</span>` : ''}${a.note ? `<div class="small muted">${esc(a.note)}</div>` : ''}</div>
+          <button class="chip-x" data-a="away-del" data-i="${a.i}" aria-label="${t('delete')}">✕</button></div>`).join('') : `<div class="empty">${t('away.none')}</div>`}
+        <p class="small muted center-text">${t('away.note2')}</p>`
+    };
+  }
+
+  // ---------------------------------------------------------- v3: Rules & referee signals
+  function viewRegeln() {
+    const CT = self.CONTENT || { rules: {}, signals: {} };
+    const tab = S.rulesTab;
+    const data = (tab === 'signals' ? CT.signals : CT.rules);
+    const list = data[S.lang] || data.en || [];
+    return {
+      title: t('rules.title'), back: '#/mehr',
+      html: `<div class="seg"><button class="${tab === 'rules' ? 'on' : ''}" data-a="rules-tab" data-v="rules">📖 ${t('rules.rules')}</button><button class="${tab === 'signals' ? 'on' : ''}" data-a="rules-tab" data-v="signals">🙋 ${t('rules.signals')}</button></div>
+        ${list.map(([ic, h, txt]) => `<div class="card rule"><span class="ri">${ic}</span><div><b>${esc(h)}</b><p class="small">${esc(txt)}</p></div></div>`).join('')}
+        <p class="small muted center-text">${t('rules.source')}</p>`
+    };
+  }
+
+  // ---------------------------------------------------------- v3: Interval timer
+  const TIMER_DEF = { work: 40, rest: 20, rounds: 8, sets: 1, setRest: 60, ex: '' };
+  const TIMER_PRESETS = [['Tabata 20/10', { work: 20, rest: 10, rounds: 8, sets: 1, setRest: 60 }], ['30/30', { work: 30, rest: 30, rounds: 10, sets: 1, setRest: 60 }], ['45/15', { work: 45, rest: 15, rounds: 8, sets: 1, setRest: 60 }], ['Circuit 3×', { work: 40, rest: 20, rounds: 6, sets: 3, setRest: 90 }]];
+  const TM = { ph: null, i: 0, left: 0, endAt: 0, run: false, iv: null, wake: null, ac: null, lastSec: -1 };
+  function timerCfg() { let c = {}; try { c = JSON.parse(store.get('vb-timer') || '{}') || {}; } catch (e) { c = {}; } return { ...TIMER_DEF, ...c }; }
+  const clampN = (v, a, b, d) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(b, Math.max(a, n)) : d; };
+  function timerReadForm(f) {
+    const e = f.elements;
+    return { work: clampN(e.work.value, 5, 3600, 40), rest: clampN(e.rest.value, 0, 3600, 20), rounds: clampN(e.rounds.value, 1, 99, 8), sets: clampN(e.sets.value, 1, 20, 1), setRest: clampN(e.setRest.value, 0, 3600, 60), ex: e.ex.value.slice(0, 1000) };
+  }
+  function timerPhases(c) {
+    const ex = c.ex.split('\n').map((x) => x.trim()).filter(Boolean);
+    const exAt = (r) => (ex.length ? ex[r % ex.length] : '');
+    const ph = [{ k: 'prep', d: 5, next: exAt(0) }];
+    for (let s = 0; s < c.sets; s++) {
+      for (let r = 0; r < c.rounds; r++) {
+        ph.push({ k: 'work', d: c.work, r: r + 1, s: s + 1, ex: exAt(r) });
+        if (r < c.rounds - 1 && c.rest > 0) ph.push({ k: 'rest', d: c.rest, r: r + 1, s: s + 1, next: exAt(r + 1) });
+      }
+      if (s < c.sets - 1 && c.setRest > 0) ph.push({ k: 'setRest', d: c.setRest, s: s + 1, next: exAt(0) });
+    }
+    ph.push({ k: 'done', d: 0 });
+    return ph;
+  }
+  const mmss = (sec) => `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+  function beep(freq, ms) {
+    try {
+      const ac = TM.ac || (TM.ac = new (window.AudioContext || window.webkitAudioContext)());
+      if (ac.state === 'suspended') ac.resume();
+      const o = ac.createOscillator(); const g = ac.createGain(); const now = ac.currentTime;
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.5, now + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, now + ms / 1000);
+      o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now + ms / 1000 + 0.05);
+    } catch (e) { /* no audio */ }
+  }
+  const buzz = (p) => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* */ } };
+  async function wakeOn() { try { if ('wakeLock' in navigator && !TM.wake) { TM.wake = await navigator.wakeLock.request('screen'); TM.wake.addEventListener('release', () => { TM.wake = null; }); } } catch (e) { /* not supported */ } }
+  function wakeOff() { try { if (TM.wake) TM.wake.release(); } catch (e) { /* */ } TM.wake = null; }
+  function timerStart(c) {
+    store.set('vb-timer', JSON.stringify(c));
+    TM.ph = timerPhases(c); TM.i = 0; TM.left = TM.ph[0].d; TM.lastSec = -1;
+    beep(660, 120); timerResume();
+  }
+  function timerResume() {
+    if (!TM.ph || TM.ph[TM.i].k === 'done') return;
+    TM.run = true; TM.endAt = Date.now() + TM.left * 1000; wakeOn();
+    clearInterval(TM.iv); TM.iv = setInterval(timerTick, 200); timerPaint();
+  }
+  function timerStop() { TM.run = false; clearInterval(TM.iv); TM.iv = null; wakeOff(); }
+  function timerToggle() {
+    if (!TM.ph) return;
+    if (TM.run) { TM.left = Math.max(0, Math.ceil((TM.endAt - Date.now()) / 1000)); timerStop(); timerPaint(); } else timerResume();
+  }
+  function timerNext(manual) {
+    if (!TM.ph) return;
+    TM.i = Math.min(TM.i + 1, TM.ph.length - 1); const p = TM.ph[TM.i];
+    TM.left = p.d; TM.endAt = Date.now() + p.d * 1000; TM.lastSec = -1;
+    if (p.k === 'done') { timerStop(); beep(880, 250); setTimeout(() => beep(880, 250), 350); setTimeout(() => beep(1175, 600), 700); buzz([300, 100, 300, 100, 600]); }
+    else if (p.k === 'work') { beep(1175, 500); buzz(400); } else { beep(523, 500); buzz([150, 80, 150]); }
+    if (manual && !TM.run) TM.endAt = 0;
+    timerPaint();
+  }
+  function timerTick() {
+    if (!TM.run || !TM.ph) return;
+    let rem = Math.ceil((TM.endAt - Date.now()) / 1000);
+    while (TM.run && rem <= 0) { timerNext(false); if (!TM.run) return; rem = Math.ceil((TM.endAt - Date.now()) / 1000); }
+    TM.left = rem;
+    if (rem <= 3 && rem >= 1 && rem !== TM.lastSec) { TM.lastSec = rem; beep(880, 120); }
+    timerPaint();
+  }
+  function timerPaint(form) {
+    const box = $('#tm'); if (!box) return;
+    const f = form || box.closest('form');
+    const p = TM.ph ? TM.ph[TM.i] : null;
+    const c = f ? timerReadForm(f) : timerCfg();
+    const total = (ph) => ph.reduce((s, x) => s + x.d, 0);
+    if (!p) {
+      box.className = 'tm idle';
+      $('#tm-phase').textContent = t('timer.ready');
+      $('#tm-time').textContent = mmss(c.work);
+      $('#tm-info').textContent = t('timer.total', { time: mmss(total(timerPhases(c))) });
+      $('#tm-ex').textContent = '';
+      $('#tm-bar').style.width = '0%';
+    } else {
+      box.className = 'tm ' + p.k + (TM.run ? '' : ' paused');
+      $('#tm-phase').textContent = t('timer.ph.' + p.k);
+      $('#tm-time').textContent = p.k === 'done' ? '✓' : mmss(TM.left);
+      const info = [];
+      if (p.r) info.push(t('timer.round', { n: p.r, total: TM.ph.filter((x) => x.k === 'work' && x.s === p.s).length }));
+      if (p.s && c.sets > 1) info.push(t('timer.set', { n: p.s, total: c.sets }));
+      const restAll = TM.ph.slice(TM.i + 1).reduce((s, x) => s + x.d, 0) + (p.k === 'done' ? 0 : TM.left);
+      if (p.k !== 'done') info.push(t('timer.left', { time: mmss(restAll) }));
+      $('#tm-info').textContent = info.join(' · ');
+      $('#tm-ex').textContent = p.k === 'work' ? (p.ex || '') : (p.next ? t('timer.next', { ex: p.next }) : '');
+      $('#tm-bar').style.width = (p.d ? Math.min(100, ((p.d - TM.left) / p.d) * 100) : 100) + '%';
+    }
+    const run = $('#tm-run'); if (run) run.hidden = !!p && p.k !== 'done';
+    const ctl = $('#tm-ctl'); if (ctl) ctl.hidden = !p || p.k === 'done';
+    const pb = $('#tm-pause'); if (pb) pb.textContent = TM.run ? '⏸ ' + t('timer.pause') : '▶ ' + t('timer.resume');
+    const set = $('#tm-set'); if (set) set.hidden = !!p && p.k !== 'done';
+  }
+  function viewTimer() {
+    const c = timerCfg();
+    const num = (n, label, min, max) => `<label>${label}<input name="${n}" type="number" inputmode="numeric" min="${min}" max="${max}" value="${c[n]}"></label>`;
+    return {
+      title: t('timer.title'), back: '#/mehr',
+      html: `<form data-f="timer" class="timerf">
+        <div class="card tm idle" id="tm"><div id="tm-phase" class="tm-phase"></div><div id="tm-time" class="tm-time">0:00</div><div id="tm-ex" class="tm-ex"></div>
+          <div class="progress"><span id="tm-bar" style="width:0%"></span></div><div id="tm-info" class="small tm-info"></div></div>
+        <button class="btn block big" id="tm-run">▶ ${t('timer.start')}</button>
+        <div class="row" id="tm-ctl" hidden><button type="button" class="btn" id="tm-pause" data-a="timer-pause">⏸ ${t('timer.pause')}</button><button type="button" class="btn ghost" data-a="timer-skip">⏭ ${t('timer.skip')}</button><button type="button" class="btn ghost" data-a="timer-reset">⏹ ${t('timer.reset')}</button></div>
+        <div class="card" id="tm-set"><div class="presets-t">${TIMER_PRESETS.map(([n], i) => `<button type="button" class="chip" data-a="timer-preset" data-i="${i}">${esc(n)}</button>`).join('')}</div>
+          <div class="grid3">${num('work', t('timer.work'), 5, 3600)}${num('rest', t('timer.rest'), 0, 3600)}${num('rounds', t('timer.rounds'), 1, 99)}${num('sets', t('timer.sets'), 1, 20)}${num('setRest', t('timer.setRest'), 0, 3600)}</div>
+          <label>${t('timer.ex')}<textarea name="ex" rows="3" maxlength="1000" placeholder="${t('timer.exPh')}">${esc(c.ex)}</textarea></label>
+          <p class="small muted">${t('timer.hint')}</p></div></form>`
+    };
+  }
+
+  // ---------------------------------------------------------- v3: Tournament mode
+  // Model: tournaments/{id} = { name, ev, format: 'rr'|'groups', courts, sets (1|2|3 = best of 3), pts, teams: [{n, p:[names], g}], matches: [{id, st, a, b, fa, fb, slot, c, s:[{a,b}], done}] }
+  function rrRounds(ids) {
+    const a = [...ids]; if (a.length % 2) a.push(-1);
+    const n = a.length; const rounds = [];
+    for (let r = 0; r < n - 1; r++) {
+      const ms = [];
+      for (let i = 0; i < n / 2; i++) { const x = a[i], y = a[n - 1 - i]; if (x >= 0 && y >= 0) ms.push(r % 2 ? [y, x] : [x, y]); }
+      rounds.push(ms); a.splice(1, 0, a.pop());
+    }
+    return rounds;
+  }
+  function slotify(list, courts, startSlot) {
+    const rest = [...list]; let slot = startSlot;
+    while (rest.length) {
+      slot++; const used = new Set(); let c = 0;
+      for (let i = 0; i < rest.length && c < courts;) {
+        const m = rest[i];
+        if (used.has(m.a) || used.has(m.b)) { i++; continue; }
+        used.add(m.a); used.add(m.b); m.slot = slot; m.c = ++c; rest.splice(i, 1);
+      }
+    }
+    return slot;
+  }
+  function buildTournament(nTeams, format, courts) {
+    const ids = Array.from({ length: nTeams }, (_, i) => i);
+    let k = 0; const mk = (st, a, b) => ({ id: 'm' + (++k), st, a, b, fa: '', fb: '', slot: 0, c: 0, s: [], done: false });
+    const groupOf = {};
+    let main = [];
+    if (format === 'groups') {
+      ids.forEach((i) => { groupOf[i] = i % 4 === 0 || i % 4 === 3 ? 'A' : 'B'; });
+      const rA = rrRounds(ids.filter((i) => groupOf[i] === 'A')); const rB = rrRounds(ids.filter((i) => groupOf[i] === 'B'));
+      for (let r = 0; r < Math.max(rA.length, rB.length); r++) { (rA[r] || []).forEach(([a, b]) => main.push(mk('A', a, b))); (rB[r] || []).forEach(([a, b]) => main.push(mk('B', a, b))); }
+    } else rrRounds(ids).forEach((ms) => ms.forEach(([a, b]) => main.push(mk('rr', a, b))));
+    let last = slotify(main, courts, 0);
+    if (format === 'groups') {
+      const ko = (st, fa, fb) => ({ ...mk(st, -1, -1), fa, fb });
+      const sf = [ko('sf1', 'A1', 'B2'), ko('sf2', 'B1', 'A2')];
+      sf.forEach((m, i) => { m.slot = last + 1 + (courts > 1 ? 0 : i); m.c = courts > 1 ? i + 1 : 1; });
+      last = sf[1].slot;
+      const fin = [ko('p3', 'L:sf1', 'L:sf2'), ko('f', 'W:sf1', 'W:sf2')];
+      fin.forEach((m, i) => { m.slot = last + 1 + (courts > 1 ? 0 : i); m.c = courts > 1 ? i + 1 : 1; });
+      main = main.concat(sf, fin);
+    }
+    return { matches: main, groupOf };
+  }
+  function matchRes(m) {
+    const sets = (m.s || []).filter((x) => x && (Number(x.a) || Number(x.b)));
+    let sa = 0, sb = 0, pa = 0, pb = 0;
+    sets.forEach((x) => { const a = Number(x.a) || 0, b = Number(x.b) || 0; pa += a; pb += b; if (a > b) sa++; else if (b > a) sb++; });
+    return { sa, sb, pa, pb, sets, win: !m.done ? null : sa > sb ? 'a' : sb > sa ? 'b' : null };
+  }
+  function standings(T, st) {
+    const ids = T.teams.map((_, i) => i).filter((i) => st === 'rr' || T.teams[i].g === st);
+    const row = Object.fromEntries(ids.map((i) => [i, { i, p: 0, w: 0, l: 0, sw: 0, sl: 0, pf: 0, pa: 0 }]));
+    T.matches.filter((m) => m.st === st && m.done).forEach((m) => {
+      const r = matchRes(m); const A = row[m.a], B = row[m.b]; if (!A || !B) return;
+      A.p++; B.p++; A.sw += r.sa; A.sl += r.sb; B.sw += r.sb; B.sl += r.sa; A.pf += r.pa; A.pa += r.pb; B.pf += r.pb; B.pa += r.pa;
+      if (r.win === 'a') { A.w++; B.l++; } else if (r.win === 'b') { B.w++; A.l++; }
+    });
+    return Object.values(row).sort((x, y) => y.w - x.w || (y.sw - y.sl) - (x.sw - x.sl) || (y.pf - y.pa) - (x.pf - x.pa) || y.pf - x.pf || x.i - y.i);
+  }
+  function resolveTeam(T, code) {
+    if (!code) return -1;
+    const g = code.match(/^([AB])(\d)$/);
+    if (g) { if (T.matches.some((m) => m.st === g[1] && !m.done)) return -1; const s = standings(T, g[1]); const r = s[Number(g[2]) - 1]; return r ? r.i : -1; }
+    const w = code.match(/^([WL]):(\w+)$/);
+    if (w) { const m = T.matches.find((x) => x.st === w[2]); if (!m || !m.done) return -1; const r = matchRes(m); if (!r.win) return -1; const win = r.win === 'a' ? teamIdx(T, m, 'a') : teamIdx(T, m, 'b'); const lose = r.win === 'a' ? teamIdx(T, m, 'b') : teamIdx(T, m, 'a'); return w[1] === 'W' ? win : lose; }
+    return -1;
+  }
+  const teamIdx = (T, m, side) => (m[side] >= 0 ? m[side] : resolveTeam(T, m['f' + side]));
+  function codeLabel(code) {
+    const g = code.match(/^([AB])(\d)$/); if (g) return t('tour.placeOf', { n: g[2], g: g[1] });
+    const w = code.match(/^([WL]):sf(\d)$/); if (w) return t(w[1] === 'W' ? 'tour.winnerSf' : 'tour.loserSf', { n: w[2] });
+    return '?';
+  }
+  const teamLabel = (T, m, side) => { const i = teamIdx(T, m, side); return i >= 0 && T.teams[i] ? esc(T.teams[i].n) : `<i class="muted">${esc(codeLabel(m['f' + side]))}</i>`; };
+  const stageLabel = (st) => (st === 'rr' ? '' : st === 'A' || st === 'B' ? t('tour.group', { g: st }) : st === 'sf1' || st === 'sf2' ? t('tour.st.sf') + ' ' + st.slice(-1) : t('tour.st.' + st));
+  function champion(T) {
+    if (T.format === 'groups') { const f = T.matches.find((m) => m.st === 'f'); if (!f || !f.done) return -1; return resolveTeam(T, 'W:f'); }
+    if (T.matches.some((m) => !m.done)) return -1; const s = standings(T, 'rr'); return s[0] ? s[0].i : -1;
+  }
+  function viewTurniere() {
+    const list = [...S.tournaments].sort((a, b) => b.ts - a.ts);
+    return {
+      title: t('tour.title'), back: '#/mehr', action: isTrainer() ? `<a class="btn sm" href="#/turnier-neu">${t('tour.new')}</a>` : '',
+      html: list.length ? list.map((T) => {
+        const done = T.matches.filter((m) => m.done).length; const ch = champion(T);
+        return `<a class="card mitem tour-i" href="#/turnier/${T.id}"><span class="mi">🏆</span><span class="ml"><b>${esc(T.name)}</b><small>${t('tour.teamsN', { n: T.teams.length })} · ${t('tour.fmt.' + T.format)} · ${t('tour.progress', { n: done, total: T.matches.length })}${ch >= 0 ? ' · 🥇 ' + esc(T.teams[ch].n) : ''}</small></span><span class="chev">›</span></a>`;
+      }).join('') : `<div class="empty">${t('tour.none')}${isTrainer() ? `<br><a class="btn" href="#/turnier-neu">${t('tour.new')}</a>` : ''}</div>`
+    };
+  }
+  function viewTurnierForm(evId) {
+    if (!isTrainer()) return { title: t('tour.new'), back: '#/turniere', html: `<div class="empty">${t('evf.onlyCoach')}</div>` };
+    const ev = evId ? S.events.find((e) => e.id === evId) : null;
+    const tm = ev && ev.teams && ev.teams.n ? Array.from({ length: ev.teams.n }, (_, i) => t('teams.team', { n: i + 1 })) : [];
+    return {
+      title: t('tour.new'), back: ev ? '#/termin/' + ev.id : '#/turniere',
+      html: `<form class="card" data-f="tournament" data-ev="${ev ? ev.id : ''}">
+        <label>${t('tour.name')}<input name="name" required maxlength="60" value="${esc(ev ? ev.title + ' – ' + t('tour.word') : t('tour.word'))}"></label>
+        <label>${t('tour.teams')} <span class="muted small">${t('tour.teamsHint')}</span><textarea name="teams" rows="6" required maxlength="800" placeholder="${t('tour.teamsPh')}">${esc(tm.join('\n'))}</textarea></label>
+        ${tm.length ? `<p class="small muted">${t('tour.fromEvHint')}</p>` : ''}
+        <label>${t('tour.format')}<select name="format"><option value="rr">${t('tour.fmt.rr')}</option><option value="groups">${t('tour.fmt.groups')}</option></select></label>
+        <div class="grid3"><label>${t('tour.courts')}<select name="courts">${[1, 2, 3, 4].map((n) => `<option ${n === 1 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+          <label>${t('tour.sets')}<select name="sets"><option value="1">${t('tour.sets1')}</option><option value="2">${t('tour.sets2')}</option><option value="3">${t('tour.sets3')}</option></select></label>
+          <label>${t('tour.pts')}<select name="pts">${[15, 21, 25].map((n) => `<option ${n === 15 ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
+        <p class="small muted">${t('tour.fmtHint')}</p>
+        <label class="check"><input type="checkbox" name="push" checked> ${t('tour.push')}</label>
+        <button class="btn block">${t('tour.create')}</button></form>`
+    };
+  }
+  function scoreTxt(m) { const r = matchRes(m); return m.done ? `<b>${r.sa}:${r.sb}</b> <small class="muted">(${r.sets.map((x) => `${Number(x.a) || 0}:${Number(x.b) || 0}`).join(', ')})</small>` : '<span class="muted">– : –</span>'; }
+  function matchRow(T, m) {
+    const r = matchRes(m); const tag = stageLabel(m.st);
+    const inner = `<span class="mc">${t('tour.court', { n: m.c })}${tag ? ` · <span class="tag">${esc(tag)}</span>` : ''}</span>
+      <span class="mt ${r.win === 'a' ? 'win' : ''}">${teamLabel(T, m, 'a')}</span><span class="ms">${scoreTxt(m)}</span><span class="mt r ${r.win === 'b' ? 'win' : ''}">${teamLabel(T, m, 'b')}</span>`;
+    const ready = teamIdx(T, m, 'a') >= 0 && teamIdx(T, m, 'b') >= 0;
+    return isTrainer() && ready ? `<a class="match ${m.done ? 'done' : ''}" href="#/spiel/${T.id}/${m.id}">${inner}<span class="chev">✎</span></a>` : `<div class="match ${m.done ? 'done' : ''}">${inner}</div>`;
+  }
+  function tableHtml(T, st) {
+    const rows = standings(T, st);
+    return `<table class="ttab"><thead><tr><th>#</th><th class="l">${t('tour.team')}</th><th>${t('tour.colP')}</th><th>${t('tour.colW')}</th><th>${t('tour.colL')}</th><th>${t('tour.colSets')}</th><th>${t('tour.colPts')}</th></tr></thead><tbody>
+      ${rows.map((x, k) => `<tr><td>${k + 1}</td><td class="l"><b>${esc(T.teams[x.i].n)}</b></td><td>${x.p}</td><td>${x.w}</td><td>${x.l}</td><td>${x.sw}:${x.sl}</td><td>${x.pf - x.pa > 0 ? '+' : ''}${x.pf - x.pa}</td></tr>`).join('')}</tbody></table>`;
+  }
+  function viewTurnier(id) {
+    const T = S.tournaments.find((x) => x.id === id);
+    if (!T) return { title: t('tour.title'), back: '#/turniere', html: `<div class="empty">${t('tour.notFound')}</div>` };
+    const ev = T.ev ? S.events.find((e) => e.id === T.ev) : null;
+    const ch = champion(T); const tab = S.tourTab;
+    const slots = [...new Set(T.matches.map((m) => m.slot))].sort((a, b) => a - b);
+    let body = '';
+    if (tab === 'table') {
+      body = T.format === 'groups' ? ['A', 'B'].map((g) => `<div class="card"><h3>${t('tour.group', { g })}</h3>${tableHtml(T, g)}</div>`).join('')
+        + `<div class="card"><h3>${t('tour.ko')}</h3>${T.matches.filter((m) => !['A', 'B'].includes(m.st)).map((m) => matchRow(T, m)).join('')}</div>`
+        : `<div class="card">${tableHtml(T, 'rr')}</div>`;
+      body += `<p class="small muted center-text">${t('tour.rank')}</p>`;
+    } else if (tab === 'teams') {
+      body = `<div class="card"><div class="teams">${T.teams.map((tm, i) => `<div class="team" style="--tc:${TEAM_COLORS[i % 4]}"><b>${esc(tm.n)}${T.format === 'groups' ? ` <small>${t('tour.group', { g: tm.g })}</small>` : ''}</b>${(tm.p || []).map((p) => `<span>${esc(p)}</span>`).join('') || '<span class="muted small">–</span>'}</div>`).join('')}</div></div>`;
+    } else {
+      const next = T.matches.filter((m) => !m.done).sort((a, b) => a.slot - b.slot)[0];
+      body = slots.map((sl) => `<div class="card slot ${next && next.slot === sl ? 'now' : ''}"><h4>${t('tour.slot', { n: sl })}${next && next.slot === sl ? ` <span class="tag blue">${t('tour.next')}</span>` : ''}</h4>${T.matches.filter((m) => m.slot === sl).sort((a, b) => a.c - b.c).map((m) => matchRow(T, m)).join('')}</div>`).join('');
+      if (isTrainer()) body += `<p class="small muted center-text">${t('tour.tapHint')}</p>`;
+    }
+    const done = T.matches.filter((m) => m.done).length;
+    return {
+      title: T.name, back: ev ? '#/termin/' + ev.id : '#/turniere',
+      html: `${ch >= 0 ? `<div class="card champ">🏆<div><small>${t('tour.champion')}</small><b>${esc(T.teams[ch].n)}</b></div></div>` : ''}
+        <div class="card"><div class="small muted">${t('tour.fmt.' + T.format)} · ${t('tour.teamsN', { n: T.teams.length })} · ${t('tour.courtsN', { n: T.courts })} · ${t('tour.setsInfo.' + T.sets, { pts: T.pts })}${ev ? ` · <a href="#/termin/${ev.id}">${esc(ev.title)}</a>` : ''}</div>
+          <div class="progress"><span style="width:${T.matches.length ? (done / T.matches.length) * 100 : 0}%"></span></div><div class="small muted">${t('tour.progress', { n: done, total: T.matches.length })}</div></div>
+        <div class="seg">${[['plan', '📋', 'tour.tabPlan'], ['table', '📊', 'tour.tabTable'], ['teams', '👥', 'tour.tabTeams']].map(([k, ic, lb]) => `<button class="${tab === k ? 'on' : ''}" data-a="tour-tab" data-v="${k}">${ic} ${t(lb)}</button>`).join('')}</div>
+        ${body}
+        ${isTrainer() ? `<button class="link sm red" data-a="tour-del" data-id="${T.id}">${t('tour.delete')}</button>` : ''}`
+    };
+  }
+  function viewSpiel(path) {
+    const [tid, mid] = String(path || '').split('/');
+    const T = S.tournaments.find((x) => x.id === tid); const m = T && T.matches.find((x) => x.id === mid);
+    if (!T || !m || !isTrainer()) return { title: t('tour.result'), back: tid ? '#/turnier/' + tid : '#/turniere', html: `<div class="empty">${t('tour.notFound')}</div>` };
+    const ko = !['rr', 'A', 'B'].includes(m.st);
+    const n = ko && Number(T.sets) === 2 ? 3 : Number(T.sets) || 1; const sets = m.s || [];
+    const A = teamLabel(T, m, 'a'), B = teamLabel(T, m, 'b');
+    return {
+      title: t('tour.result'), back: '#/turnier/' + T.id,
+      html: `<form class="card" data-f="match" data-t="${T.id}" data-m="${m.id}">
+        <p class="muted small">${t('tour.court', { n: m.c })} · ${t('tour.slot', { n: m.slot })}${stageLabel(m.st) ? ' · ' + esc(stageLabel(m.st)) : ''}</p>
+        <div class="setgrid"><span></span><b>${A}</b><b>${B}</b>
+        ${Array.from({ length: n }, (_, k) => `<span class="muted">${t('tour.setN', { n: k + 1 })}${n === 3 && k === 2 ? '<br><small>' + t('tour.ifNeeded') + '</small>' : ''}</span><input name="a${k}" type="number" inputmode="numeric" min="0" max="99" value="${sets[k] && sets[k].a != null ? sets[k].a : ''}" ${k === 0 ? 'required' : ''}><input name="b${k}" type="number" inputmode="numeric" min="0" max="99" value="${sets[k] && sets[k].b != null ? sets[k].b : ''}" ${k === 0 ? 'required' : ''}>`).join('')}</div>
+        <p class="small muted">${t('tour.ptsHint', { pts: T.pts })}</p>
+        <button class="btn block">${t('tour.saveResult')}</button>
+        ${m.done ? `<button type="button" class="link sm red" data-a="match-clear" data-t="${T.id}" data-m="${m.id}">${t('tour.clear')}</button>` : ''}</form>`
+    };
+  }
+  async function saveMatch(tid, mid, sets) {
+    const T = S.tournaments.find((x) => x.id === tid); if (!T) return;
+    const before = champion(T);
+    const matches = T.matches.map((m) => (m.id === mid ? { ...m, s: sets || [], done: !!sets } : m));
+    await DB.update('tournaments/' + tid, { matches, updated: Date.now() });
+    const after = champion({ ...T, matches });
+    if (sets && after >= 0 && before < 0 && T.notify) await push(T.notify, 'tourEnd', { name: T.name, winner: T.teams[after].n }, '#/turnier/' + tid);
+    toast(t('saved')); go('#/turnier/' + tid);
+  }
+
   // ---------- Unread badges
   function badges() {
     const now = Date.now();
@@ -988,6 +1366,7 @@
   const readMarked = new Set();
   function afterRender(r, id) {
     if (r !== 'design' && S.previewing) { S.previewing = false; applyTheme(S.theme); }
+    if (r === 'timer') timerPaint();
     if (r === 'news') {
       if (S.posts.some((p) => p.ts > SEEN.news)) { PREV.news = SEEN.news; SEEN.news = Date.now(); saveSeen(); }
       S.posts.forEach((p) => {
@@ -1071,7 +1450,7 @@
       title: t('mem.title'), back: '#/mehr', action: `<button class="btn sm" data-a="invite">${t('mem.invite')}</button>`,
       html: `${pend.length ? `<h4 class="sec">${t('mem.waiting')}</h4>${pend.map((m) => `<div class="card mrow"><b>${esc(m.name)}</b><div class="row"><button class="btn sm" data-a="approve" data-id="${m.id}">${t('mem.approve')}</button><button class="btn sm danger" data-a="reject" data-id="${m.id}">${t('mem.reject')}</button></div></div>`).join('')}` : ''}
         <h4 class="sec">${t('mem.active', { n: activeMembers().length })}</h4>
-        ${activeMembers().map((m) => `<div class="card mrow"><div><b>${esc(m.name)}</b> ${m.role === 'trainer' ? `<span class="tag blue">${t('mem.coach')}</span>` : ''} ${m.lang ? `<span class="small">${(I.langs.find((l) => l.code === m.lang) || {}).flag || ''}</span>` : ''}<div class="row small">${skillSelect(m.id)}<a class="link sm" href="#/ziele/${m.id}">🎯 ${t('goal.short')}</a></div></div>
+        ${activeMembers().map((m) => `<div class="card mrow"><div><b>${esc(m.name)}</b>${posTag(posOf(m.id))} ${isAwayAt(m.id, Date.now()) ? `<span class="tag">🏖️ ${t('away.until', { date: F_.dm.format(awayOf(m).find((a) => a.f <= Date.now() && Date.now() <= a.t).t) })}</span>` : ''} ${m.role === 'trainer' ? `<span class="tag blue">${t('mem.coach')}</span>` : ''} ${m.lang ? `<span class="small">${(I.langs.find((l) => l.code === m.lang) || {}).flag || ''}</span>` : ''}<div class="row small">${skillSelect(m.id)}<a class="link sm" href="#/ziele/${m.id}">🎯 ${t('goal.short')}</a></div></div>
           ${m.id !== uid() ? `<div class="row"><button class="link sm" data-a="role" data-id="${m.id}">${m.role === 'trainer' ? t('mem.toMember') : t('mem.toCoach')}</button><button class="link sm red" data-a="reject" data-id="${m.id}">${t('mem.remove')}</button></div>` : `<span class="muted small">${t('mem.you')}</span>`}</div>`).join('')}
         <p class="small muted">${t('mem.note')} ${t('teams.skillHint')}</p>`
     };
@@ -1164,10 +1543,12 @@
     'guest-del': async (el) => {
       const ev = S.events.find((e) => e.id === el.dataset.id); if (!ev) return;
       const host = el.dataset.h; const i = Number(el.dataset.i);
-      const before = rsvpLists(ev).confirmed;
+      const beforeL = rsvpLists(ev); const before = beforeL.confirmed;
       const arr = ((ev.guests || {})[host] || []).filter((_, k) => k !== i);
       await DB.update('events/' + ev.id, { ['guests.' + host]: arr.length ? arr : DEL });
-      await notifyPromoted(before, rsvpLists({ ...ev, guests: { ...(ev.guests || {}), [host]: arr } }).confirmed, ev);
+      const nextEv = { ...ev, guests: { ...(ev.guests || {}), [host]: arr } };
+      await notifyPromoted(before, rsvpLists(nextEv).confirmed, ev);
+      await notifySpotFree(beforeL, nextEv);
     },
     'teams-n': (el) => { const ev = S.events.find((e) => e.id === el.dataset.id); const n = Number(el.dataset.n); S.teamDraft = { ev: ev.id, n, teams: drawTeams(playerPool(ev), n) }; render(true); },
     'teams-draw': (el) => { const ev = S.events.find((e) => e.id === el.dataset.id); const n = Number(el.dataset.n); S.teamDraft = { ev: ev.id, n, teams: drawTeams(playerPool(ev), n) }; render(true); },
@@ -1192,6 +1573,16 @@
       if (el.dataset.close) { const m = el.closest('.modal'); if (m) m.remove(); }
       if (!done) toast('✅ ' + t('hw.done'));
     },
+    fav: (el) => { const v = S.videos.find((x) => x.id === el.dataset.id); if (!v) return; return DB.update('videos/' + v.id, { ['fav.' + uid()]: v.fav && v.fav[uid()] ? DEL : true }); },
+    'away-del': (el) => confirmDo(t('away.deleteQ'), async () => { const list = awayOf(S.me).filter((_, i) => i !== Number(el.dataset.i)); await DB.update('members/' + uid(), { away: list }); render(true); }),
+    'rules-tab': (el) => { S.rulesTab = el.dataset.v; render(true); },
+    'tour-tab': (el) => { S.tourTab = el.dataset.v; render(true); },
+    'tour-del': (el) => confirmDo(t('tour.deleteQ'), async () => { await DB.remove('tournaments/' + el.dataset.id); go('#/turniere'); }),
+    'match-clear': (el) => confirmDo(t('tour.clearQ'), () => saveMatch(el.dataset.t, el.dataset.m, null)),
+    'timer-preset': (el) => { const f = el.closest('form'); const p = TIMER_PRESETS[Number(el.dataset.i)][1]; Object.entries(p).forEach(([k, v]) => { if (f.elements[k]) f.elements[k].value = v; }); timerPaint(f); },
+    'timer-pause': () => timerToggle(),
+    'timer-skip': () => timerNext(true),
+    'timer-reset': () => { timerStop(); TM.ph = null; render(true); },
     'hw-del': (el) => confirmDo(t('hw.deleteQ'), () => DB.remove('homework/' + el.dataset.id)),
     'copy-text': async (el) => { try { await navigator.clipboard.writeText(el.dataset.text); toast('📋 ' + t('copied')); } catch (e) { window.prompt('', el.dataset.text); } },
     'cal-newkey': () => confirmDo(t('abo.newKeyQ'), () => DB.set('settings/cal', { key: Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join(''), ts: Date.now() }, false)),
@@ -1210,10 +1601,61 @@
   };
 
   const FORMS = {
+    // ----- v3 forms
+    async away(f) {
+      const e = f.elements; const fr = dayStart(e.f.value); const to = dayEnd(e.t.value);
+      if (!(to >= fr)) throw new Error(t('away.badRange'));
+      const keep = awayOf(S.me).filter((a) => a.t > Date.now() - 30 * 864e5);
+      await DB.update('members/' + uid(), { away: [...keep, { f: fr, t: to, note: e.note.value.trim() }].sort((a, b) => a.f - b.f).slice(-20) });
+      toast('🏖️ ' + t('saved')); render(true);
+    },
+    async timer(f) {
+      TM.ac = TM.ac || (() => { try { return new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } })();
+      timerStart(timerReadForm(f));
+    },
+    async tournament(f) {
+      const e = f.elements; const ev = f.dataset.ev ? S.events.find((x) => x.id === f.dataset.ev) : null;
+      const names = e.teams.value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 16);
+      if (names.length < 2) throw new Error(t('tour.min2'));
+      if (new Set(names.map((x) => x.toLowerCase())).size !== names.length) throw new Error(t('tour.dupes'));
+      const format = e.format.value; if (format === 'groups' && names.length < 4) throw new Error(t('tour.min4'));
+      const courts = Number(e.courts.value) || 1;
+      const { matches, groupOf } = buildTournament(names.length, format, courts);
+      const evTeams = ev && ev.teams && ev.teams.n ? ev.teams : null;
+      const teams = names.map((n, i) => {
+        const keys = evTeams && i < evTeams.n ? evTeams['t' + i] || [] : [];
+        return { n, p: keys.map((k) => (k.startsWith('g:') ? (guestName(k) || '?') + ' (G)' : nameOf(k))), g: groupOf[i] || '' };
+      });
+      const notify = e.push.checked ? (ev ? rsvpLists(ev).confirmed : 'all') : '';
+      const id = await DB.add('tournaments', { name: e.name.value.trim(), ev: ev ? ev.id : '', format, courts, sets: Number(e.sets.value) || 1, pts: Number(e.pts.value) || 25, teams, matches, notify, by: uid(), ts: Date.now() });
+      if (notify && (notify === 'all' || notify.length)) await push(notify, 'tournament', { name: e.name.value.trim() }, '#/turnier/' + id);
+      S.tourTab = 'plan'; toast('🏆 ' + t('tour.created')); go('#/turnier/' + id);
+    },
+    async match(f) {
+      const T = S.tournaments.find((x) => x.id === f.dataset.t); if (!T) return;
+      const m = T.matches.find((x) => x.id === f.dataset.m); const ko = !['rr', 'A', 'B'].includes(m.st);
+      const sets = [];
+      for (let k = 0; k < 3; k++) {
+        const a = f.elements['a' + k], b = f.elements['b' + k]; if (!a || !b) break;
+        if (a.value === '' && b.value === '') continue;
+        if (a.value === '' || b.value === '') throw new Error(t('tour.bothScores'));
+        const x = Number(a.value), y = Number(b.value);
+        if (x === y) throw new Error(t('tour.noTieSet'));
+        sets.push({ a: x, b: y });
+      }
+      if (!sets.length) throw new Error(t('tour.bothScores'));
+      const r = matchRes({ s: sets, done: true });
+      if ((ko || Number(T.sets) === 3) && !r.win) throw new Error(t('tour.needWinner'));
+      await saveMatch(T.id, m.id, sets);
+    },
     async login(f) { const e = f.elements; await DB.login(e.email.value.trim(), e.pw.value); },
     async register(f) { const e = f.elements; await DB.register(e.email.value.trim(), e.pw.value, e.name.value.trim(), S.lang); await notifyNew(e.name.value.trim()); },
     async 'profile-create'(f) { const name = f.elements.name.value.trim(); await DB.set('members/' + uid(), { name, lang: S.lang, role: 'member', status: 'pending', joined: Date.now() }); await notifyNew(name); },
-    async profile(f) { await DB.update('members/' + uid(), { name: f.elements.name.value.trim() }); toast(t('saved')); go('#/mehr'); },
+    async profile(f) {
+      const pos = [...f.querySelectorAll('input[name=pos]:checked')].map((i) => i.value);
+      if (pos.length > 2) throw new Error(t('pos.max2'));
+      await DB.update('members/' + uid(), { name: f.elements.name.value.trim(), pos }); toast(t('saved')); go('#/mehr');
+    },
     async event(f) {
       const e = f.elements; const id = f.dataset.id; const ev = id ? S.events.find((x) => x.id === id) : null;
       const start = new Date(e.date.value + 'T' + e.from.value);
@@ -1370,9 +1812,11 @@
   document.addEventListener('input', (e) => {
     if (e.target.id === 'q') { S.q = e.target.value; const r = $('#results'); if (r) r.innerHTML = searchResults(); }
     if (e.target.form && e.target.form.dataset.f === 'design' && e.target.type === 'color') previewTheme(e.target.form);
+    if (e.target.form && e.target.form.dataset.f === 'timer' && !TM.ph) timerPaint(e.target.form);
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const m = $('.modal'); if (m) m.remove(); } });
-  window.addEventListener('hashchange', () => { S.navCount++; const m = $('.modal'); if (m) m.remove(); render(true); });
+  window.addEventListener('hashchange', () => { S.navCount++; const m = $('.modal'); if (m) m.remove(); if (TM.run && route().r !== 'timer') timerToggle(); render(true); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && TM.run) wakeOn(); });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.installEvt = e; });
 
   // Demo: show the push that would be sent, in the current language

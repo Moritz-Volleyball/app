@@ -217,6 +217,31 @@ details.reads{margin-top:8px;font-size:.9rem}details.reads summary{color:var(--m
 .toast.out{opacity:0;transform:translateY(-10px)}
 @keyframes tin{from{opacity:0;transform:translateY(-10px)}}
 @media (min-width:700px){.tabs{justify-content:center}.tabs a{flex:0 0 120px}}
+/* ---------- v3 */
+[hidden]{display:none!important}.grid3>*{min-width:0}
+.st-away{background:#e7f4f6;color:#1f7a8c}.chip.away{background:#e7f4f6}
+.pos{font-size:.7rem;font-weight:700;color:var(--blue);background:var(--sky);border-radius:6px;padding:1px 5px;margin-left:3px;vertical-align:1px}
+.possum{width:100%;margin-top:4px}.posgrid{display:grid;gap:2px}
+.banner.awayb{background:linear-gradient(135deg,#145e6b,#1f8fa3);text-decoration:none}.banner.awayb .chev{color:#fff;font-size:22px}
+.vbody{position:relative}.favbtn{float:right;border:1px solid var(--line);background:#fff;border-radius:999px;padding:3px 9px;font-size:16px;line-height:1.2;cursor:pointer;color:var(--wait)}
+.favbtn.on{background:var(--waitbg);border-color:var(--accent)}.favbtn b{font-size:.75rem;color:var(--muted);margin-left:3px}
+.rule{display:flex;gap:12px;align-items:flex-start}.rule .ri{font-size:26px;line-height:1.1;flex:0 0 34px;text-align:center}.rule p{margin:4px 0 0}
+.tm{text-align:center;transition:background .3s;color:var(--ink)}.tm-phase{font-weight:800;font-size:1.15rem;letter-spacing:.02em;text-transform:uppercase}
+.tm-time{font-size:min(26vw,120px);font-weight:800;line-height:1.05;font-variant-numeric:tabular-nums;margin:6px 0}
+.tm-ex{min-height:1.4em;font-weight:700;font-size:1.1rem;margin-bottom:8px}.tm-info{margin-top:6px;color:inherit;opacity:.85}
+.tm.work{background:#e3f6ea;color:#0d6b3a}.tm.rest,.tm.setRest{background:#fff3d6;color:#8a5800}.tm.prep{background:var(--sky);color:var(--navy)}.tm.done{background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff}
+.tm.paused .tm-time{opacity:.45}.tm .progress{background:rgba(0,0,0,.08)}
+.btn.big{font-size:1.2rem;padding:16px;margin-bottom:12px}#tm-ctl{margin-bottom:12px}#tm-ctl .btn{flex:1}
+.presets-t{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.match{display:grid;grid-template-columns:1fr auto 1fr auto;grid-template-areas:"mc mc mc ed" "ma ms mb ed";gap:2px 8px;align-items:center;padding:9px 4px;border-top:1px solid var(--line);color:var(--ink)}
+.match:first-of-type{border-top:0}.match .mc{grid-area:mc;font-size:.78rem;color:var(--muted)}.match .mt{grid-area:ma;font-weight:600}.match .mt.r{grid-area:mb;text-align:right}
+.match .ms{grid-area:ms;text-align:center;white-space:nowrap}.match .chev{grid-area:ed;color:var(--blue)}.match .win{color:var(--ok);font-weight:800}
+.match.done{background:linear-gradient(90deg,transparent,#f6faf7,transparent)}.slot h4{margin:0 0 4px}.slot.now{outline:2px solid var(--accent)}
+.ttab{width:100%;border-collapse:collapse;font-size:.9rem}.ttab th,.ttab td{padding:6px 4px;text-align:center;border-bottom:1px solid var(--line)}.ttab th{color:var(--muted);font-weight:600;font-size:.78rem}.ttab .l{text-align:left}
+.ttab tbody tr:first-child td{font-weight:700}
+.champ{display:flex;gap:14px;align-items:center;font-size:40px;background:linear-gradient(135deg,#7a5200,#ffb703);color:#fff}.champ small{display:block;font-size:.8rem;opacity:.9}.champ b{font-size:1.3rem}
+.setgrid{display:grid;grid-template-columns:auto 1fr 1fr;gap:8px;align-items:center;margin:8px 0}.setgrid b{text-align:center;font-size:.9rem}.setgrid input{text-align:center;font-size:1.2rem}
+.mrow.past{opacity:.55}
 </style>
 </head>
 <body>
@@ -224,6 +249,7 @@ details.reads{margin-top:8px;font-size:.9rem}details.reads summary{color:var(--m
 <noscript>Please enable JavaScript.</noscript>
 <script src="config.js"></script>
 <script src="i18n.js"></script>
+<script src="content.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>

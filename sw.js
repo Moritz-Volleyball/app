@@ -1,8 +1,8 @@
 // Service Worker: Offline-Start + Push-Nachrichten im Hintergrund
 importScripts('./config.js');
 const CFG = self.APP_CONFIG || {};
-const CACHE = 'vb-cache-v2';
-const ASSETS = ['./', './index.html', './app.js', './i18n.js', './data.js', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
+const CACHE = 'vb-cache-v4';
+const ASSETS = ['./', './index.html', './app.js', './i18n.js', './content.js', './data.js', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 if (CFG.firebase) {
   importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
