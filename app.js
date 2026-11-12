@@ -1356,7 +1356,18 @@
   // ---------------------------------------------------------- v4: 5-1 rotation quiz (court graphics + animated solution)
   const QM = 40; // px per metre
   const qxy = (p) => [p[0] * QM, p[1] * QM];
-  const QZ = { i: 0, score: 0, answered: false, results: [], wrong: [], order: null, playing: false };
+  const QZ = { i: 0, score: 0, answered: false, results: {}, wrong: [], order: null, playing: false };
+  // results: question position -> true/false (questions can be answered in any order via the picker)
+  function quizTally() {
+    const keys = Object.keys(QZ.results).map(Number).sort((a, b) => a - b);
+    QZ.score = keys.filter((k) => QZ.results[k]).length;
+    QZ.wrong = keys.filter((k) => !QZ.results[k]).map((k) => (QZ.order ? QZ.order[k] : k));
+  }
+  const qShort = (q) => { const x = quizText(q).q; return x.length > 70 ? x.slice(0, 68).trim() + '…' : x; };
+  function quizPicker(QS, open) {
+    return `<div class="qpick" id="q-pick" ${open ? '' : 'hidden'}><div class="small muted">${t('quiz.pickT')}</div>
+      ${QS.map((q, k) => `<button type="button" class="qpick-i ${k === QZ.i ? 'cur' : ''}" data-a="quiz-go" data-k="${k}"><b>${k + 1}</b><span>${esc(qShort(q))}</span><i>${k in QZ.results ? (QZ.results[k] ? '✅' : '❌') : ''}</i></button>`).join('')}</div>`;
+  }
   // Questions of the current round: all, or only the ones answered wrong in the previous round
   const quizList = () => { const all = self.QUIZ ? self.QUIZ.questions : []; return QZ.order ? QZ.order.map((k) => all[k]) : all; };
   const quizText = (q) => (q.t[S.lang] || q.t.en);
@@ -1458,15 +1469,17 @@
     if (QZ.i >= QS.length) {
       const allN = self.QUIZ.questions.length;
       const prevBest = Number(store.get('vb-quiz-best')) || 0;
-      const best = QZ.order ? prevBest : Math.max(prevBest, QZ.score); store.set('vb-quiz-best', String(best));
+      const full = !QZ.order && Object.keys(QZ.results).length === QS.length;
+      const best = full ? Math.max(prevBest, QZ.score) : prevBest; store.set('vb-quiz-best', String(best));
       const pct = Math.round((QZ.score / QS.length) * 100);
       return {
         title: t('quiz.title'), back: '#/mehr',
         html: `<div class="card center-text qend"><div class="qend-ic">${pct >= 85 ? '🏆' : pct >= 60 ? '💪' : '📚'}</div><h2>${t(QZ.order ? 'quiz.retryResult' : 'quiz.result', { n: QZ.score, total: QS.length })}</h2>
           <p class="muted">${t(pct >= 85 ? 'quiz.r3' : pct >= 60 ? 'quiz.r2' : 'quiz.r1')}</p><p class="small muted">${t('quiz.best', { n: best, total: allN })}</p>
-          <div class="qdots">${QZ.results.map((r) => `<span class="${r ? 'ok' : 'bad'}"></span>`).join('')}</div>
+          <div class="qdots">${QS.map((_, k) => `<span class="${k in QZ.results ? (QZ.results[k] ? 'ok' : 'bad') : ''}"></span>`).join('')}</div>
           ${QZ.wrong.length ? `<button class="btn block" data-a="quiz-retry">🎯 ${t('quiz.retryWrong', { n: QZ.wrong.length })}</button>` : `<p class="small"><b>✅ ${t('quiz.allRight')}</b></p>`}
-          <button class="btn block ${QZ.wrong.length ? 'ghost' : ''}" data-a="quiz-restart">🔄 ${t('quiz.again')}</button></div>`
+          <button class="btn block ${QZ.wrong.length ? 'ghost' : ''}" data-a="quiz-restart">🔄 ${t('quiz.again')}</button></div>
+          <div class="card">${quizPicker(QS, true)}</div>`
       };
     }
     const q = QS[QZ.i]; const tx = quizText(q);
@@ -1478,7 +1491,8 @@
       title: t('quiz.title'), back: '#/mehr',
       html: `<form data-f="quiz" class="quizf">
         ${QZ.i === 0 && !QZ.answered && !QZ.order ? `<div class="card qintro"><b>🔄 ${t('quiz.introT')}</b><p class="small">${t('quiz.intro')}</p></div>` : ''}
-        <div class="qhead"><span>${t('quiz.qn', { n: QZ.i + 1, total: QS.length })}</span><span class="qdots">${QS.map((_, k) => `<span class="${k < QZ.results.length ? (QZ.results[k] ? 'ok' : 'bad') : k === QZ.i ? 'cur' : ''}"></span>`).join('')}</span><span>⭐ ${QZ.score}</span></div>
+        <div class="qhead"><button type="button" class="qpick-btn" data-a="quiz-pick" aria-label="${t('quiz.pickT')}">☰ ${t('quiz.qn', { n: QZ.i + 1, total: QS.length })}</button><span class="qdots">${QS.map((_, k) => `<span class="${k in QZ.results ? (QZ.results[k] ? 'ok' : 'bad') : k === QZ.i ? 'cur' : ''}"></span>`).join('')}</span><span>⭐ ${QZ.score}</span></div>
+        ${quizPicker(QS, false)}
         <div class="card qcard"><h3 class="qq">${esc(tx.q)}</h3>
           <div class="qcourt-wrap"><div class="qtilt">${courtSvg(q, false)}</div><div class="qcap" id="q-cap"></div></div>${legend}</div>
         ${opts}
@@ -1488,7 +1502,7 @@
   async function quizAnswer(i) {
     if (QZ.answered) return;
     const QS = quizList(); const q = QS[QZ.i]; const ok = i === q.correct; const tx = quizText(q);
-    QZ.answered = true; QZ.results.push(ok); if (ok) QZ.score++; else QZ.wrong.push(QZ.order ? QZ.order[QZ.i] : QZ.i);
+    QZ.answered = true; QZ.results[QZ.i] = ok; quizTally();
     document.querySelectorAll('.qopt').forEach((b) => { const k = Number(b.dataset.i); b.disabled = true; b.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
     if (q.kind === 'spot') q.spots.forEach((_, k) => { const s = $('#qs-' + k); if (s) s.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
     if (q.kind === 'player') q.opts.forEach((id, k) => { const el = $('#qt-' + id); if (el) el.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
@@ -1740,8 +1754,10 @@
     'quiz-ans': (el) => quizAnswer(Number(el.dataset.i)),
     'quiz-next': () => { QZ.i++; QZ.answered = false; render(true); window.scrollTo(0, 0); },
     'quiz-replay': () => quizReplay(),
-    'quiz-restart': () => { Object.assign(QZ, { i: 0, score: 0, answered: false, results: [], wrong: [], order: null }); render(true); window.scrollTo(0, 0); },
-    'quiz-retry': () => { Object.assign(QZ, { order: [...QZ.wrong], i: 0, score: 0, answered: false, results: [], wrong: [] }); render(true); window.scrollTo(0, 0); },
+    'quiz-pick': () => { const p = $('#q-pick'); if (p) p.hidden = !p.hidden; },
+    'quiz-go': (el) => { QZ.i = Number(el.dataset.k); QZ.answered = false; render(true); window.scrollTo(0, 0); },
+    'quiz-restart': () => { Object.assign(QZ, { i: 0, score: 0, answered: false, results: {}, wrong: [], order: null }); render(true); window.scrollTo(0, 0); },
+    'quiz-retry': () => { Object.assign(QZ, { order: [...QZ.wrong], i: 0, score: 0, answered: false, results: {}, wrong: [] }); render(true); window.scrollTo(0, 0); },
     'rules-tab': (el) => { S.rulesTab = el.dataset.v; render(true); },
     'tour-tab': (el) => { S.tourTab = el.dataset.v; render(true); },
     'tour-del': (el) => confirmDo(t('tour.deleteQ'), async () => { await DB.remove('tournaments/' + el.dataset.id); go('#/turniere'); }),

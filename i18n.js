@@ -676,7 +676,7 @@
   // ---------------------------------------------------------- Version 3.1
   const ui4 = {
     en: {
-      'quiz.title': 'Rotation quiz (5-1)', 'quiz.retryWrong': 'Retry only the wrong ones ({n})', 'quiz.retryResult': 'Retry: {n} of {total} correct', 'quiz.allRight': 'All answers correct!', 'quiz.sub': 'Setter, rotation & serve receive – with animations',
+      'quiz.title': 'Rotation quiz (5-1)', 'quiz.pickT': 'Jump to a question:', 'quiz.retryWrong': 'Retry only the wrong ones ({n})', 'quiz.retryResult': 'Retry: {n} of {total} correct', 'quiz.allRight': 'All answers correct!', 'quiz.sub': 'Setter, rotation & serve receive – with animations',
       'quiz.introT': 'Our 5-1 system', 'quiz.intro': 'Only the setter (yellow) has a fixed role. Everyone else (blue) follows the rotation and positions themselves so that the setter can always take the second ball. Answer, then watch the solution on the court.',
       'quiz.qn': 'Question {n}/{total}', 'quiz.lgSetter': 'Setter', 'quiz.lgTeam': 'Teammates', 'quiz.lgOpp': 'Opponent', 'quiz.lgBall': 'Ball',
       'quiz.right': 'Correct!', 'quiz.wrong': 'Not quite – the right answer is {a}.', 'quiz.replay': 'Replay', 'quiz.next': 'Next', 'quiz.finish': 'Show result',
@@ -686,7 +686,7 @@
       'gskill.l1': 'Beginner', 'gskill.l2': 'Below average', 'gskill.l3': 'Average', 'gskill.l4': 'Good', 'gskill.l5': 'Very strong'
     },
     ru: {
-      'quiz.title': 'Квиз: расстановка 5-1', 'quiz.retryWrong': 'Повторить только ошибки ({n})', 'quiz.retryResult': 'Повтор: {n} из {total} правильно', 'quiz.allRight': 'Все ответы правильные!', 'quiz.sub': 'Связующий, переходы и приём – с анимацией',
+      'quiz.title': 'Квиз: расстановка 5-1', 'quiz.pickT': 'Перейти к вопросу:', 'quiz.retryWrong': 'Повторить только ошибки ({n})', 'quiz.retryResult': 'Повтор: {n} из {total} правильно', 'quiz.allRight': 'Все ответы правильные!', 'quiz.sub': 'Связующий, переходы и приём – с анимацией',
       'quiz.introT': 'Наша система 5-1', 'quiz.intro': 'Фиксированная роль только у связующего (жёлтый). Все остальные (синие) следуют переходу и становятся так, чтобы связующий всегда мог сыграть второй мяч. Ответьте – и посмотрите решение на площадке.',
       'quiz.qn': 'Вопрос {n}/{total}', 'quiz.lgSetter': 'Связующий', 'quiz.lgTeam': 'Игроки', 'quiz.lgOpp': 'Соперник', 'quiz.lgBall': 'Мяч',
       'quiz.right': 'Верно!', 'quiz.wrong': 'Не совсем – правильный ответ {a}.', 'quiz.replay': 'Повторить', 'quiz.next': 'Дальше', 'quiz.finish': 'Результат',
@@ -696,7 +696,7 @@
       'gskill.l1': 'Новичок', 'gskill.l2': 'Ниже среднего', 'gskill.l3': 'Средне', 'gskill.l4': 'Хорошо', 'gskill.l5': 'Очень сильно'
     },
     de: {
-      'quiz.title': 'Rotations-Quiz (5-1)', 'quiz.retryWrong': 'Nur die falschen nochmal ({n})', 'quiz.retryResult': 'Wiederholung: {n} von {total} richtig', 'quiz.allRight': 'Alle Antworten richtig!', 'quiz.sub': 'Zuspieler, Rotation & Annahme – mit Animationen',
+      'quiz.title': 'Rotations-Quiz (5-1)', 'quiz.pickT': 'Zu einer Frage springen:', 'quiz.retryWrong': 'Nur die falschen nochmal ({n})', 'quiz.retryResult': 'Wiederholung: {n} von {total} richtig', 'quiz.allRight': 'Alle Antworten richtig!', 'quiz.sub': 'Zuspieler, Rotation & Annahme – mit Animationen',
       'quiz.introT': 'Unser 5-1-System', 'quiz.intro': 'Nur der Zuspieler (gelb) hat eine feste Rolle. Alle anderen (blau) folgen der Rotation und stellen sich so auf, dass der Zuspieler immer den zweiten Ball spielen kann. Antworte und sieh dir danach die Lösung auf dem Feld an.',
       'quiz.qn': 'Frage {n}/{total}', 'quiz.lgSetter': 'Zuspieler', 'quiz.lgTeam': 'Mitspieler', 'quiz.lgOpp': 'Gegner', 'quiz.lgBall': 'Ball',
       'quiz.right': 'Richtig!', 'quiz.wrong': 'Nicht ganz – richtig ist {a}.', 'quiz.replay': 'Nochmal ansehen', 'quiz.next': 'Weiter', 'quiz.finish': 'Ergebnis anzeigen',
