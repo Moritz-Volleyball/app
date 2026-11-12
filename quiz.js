@@ -98,6 +98,22 @@
         de: { q: 'Der Zuspieler steht auf Position 5 (hinten links), der Gegner schlägt auf. #7 (Position 3) ist zur Annahme nach hinten gegangen – so weit hinten und so weit links wie erlaubt, knapp vor #9. Wo wartet der Zuspieler?', o: ['A – am Netz, knapp hinter #11', 'B – tief in der hinteren linken Ecke', 'C – vor #11', 'D – rechts von #9'], x: 'Zuspieler und #7 tauschen: #7 (Pos. 3) geht so weit wie möglich nach hinten und nach links und bleibt dabei knapp vor #9 (Pos. 6). #11 (Pos. 4) bleibt am Netz. Position 5 muss nur hinter Position 4 und links von Position 6 stehen – der Zuspieler übernimmt also vorne den Platz von #7, knapp hinter #11, ohne eine Rotationsgrenze zu überschreiten, und hat nur ein paar Schritte zum Zielpunkt. B ist erlaubt, aber viel zu weit, C (vor 4) und D (rechts von 6) sind Aufstellungsfehler.' }
       }
     },
+    { // hide5b – follow-up: after the set everyone returns (setter to base right back, #7 back to the net)
+      id: 'hide5b', kind: 'formation', correct: 2,
+      forms: [
+        { S: [6.2, 1.0], a: [2.6, 6.0], b: [1.5, 1.0], c: [7.5, 1.0], d: [4.5, 7.4], e: [7.5, 7.0] },
+        { S: [1.6, 7.0], a: [4.5, 0.9], b: [1.5, 1.0], c: [7.5, 1.0], d: [4.5, 7.4], e: [7.5, 7.0] },
+        { S: [7.5, 7.0], a: [4.5, 0.9], b: [1.5, 1.0], c: [7.5, 1.0], d: [4.5, 7.4], e: [1.6, 7.0] },
+        { S: [7.5, 0.9], a: [4.5, 0.9], b: [1.5, 0.9], c: [7.5, 4.0], d: [4.5, 7.4], e: [1.6, 7.0] }
+      ],
+      pl: { S: [6.2, 1.0], b: [1.4, 0.9], a: [2.6, 5.0], c: [7.4, 3.0], d: [4.8, 6.0], e: [7.4, 6.0] }, slots: { S: 5, b: 4, a: 3, c: 2, e: 1, d: 6 }, opp: [[4.0, -1.6]], ball0: [4.0, -2.0],
+      sol: [{ moves: { S: [7.5, 7.0], a: [4.5, 0.9], e: [1.6, 7.0], c: [7.5, 1.0], b: [1.5, 1.0], d: [4.5, 7.4] } }, { moves: { a: [4.2, 0.4], b: [3.4, 0.4] }, ball: [[4.0, -2.0], [4.4, -3.4]], h: 0.8 }],
+      t: {
+        en: { q: 'Follow-up to the previous question: the setter has set, #11 attacked, and now the opponent is about to attack. Which positions do we take?', o: ['A', 'B', 'C', 'D'], x: 'C: #7 is a front-row player (position 3), so he goes straight back to the net in the middle to block. The setter is a back-row player and goes to his base position right back (position 1); #14 switches with him to the left back. A: nobody moves back – #7 is missing at the block and the setter stays at the net. B: the setter defends left back instead of at his base right back. D: the setter is in the back row and may not block.' },
+        ru: { q: 'Продолжение предыдущего вопроса: связующий отдал передачу, №11 атаковал, и теперь соперник готовится к атаке. Какие места мы занимаем?', o: ['A', 'B', 'C', 'D'], x: 'C: №7 – игрок передней линии (зона 3), поэтому он сразу возвращается к сетке в центр на блок. Связующий – игрок задней линии и уходит на своё базовое место сзади справа (зона 1); №14 меняется с ним и уходит сзади налево. A: никто не возвращается – №7 нет на блоке, а связующий остаётся у сетки. B: связующий защищается сзади слева, а не на своём месте сзади справа. D: связующий на задней линии и не имеет права блокировать.' },
+        de: { q: 'Folgefrage zur vorherigen Frage: Der Zuspieler hat gestellt, #11 hat angegriffen, und jetzt greift gleich der Gegner an. Welche Positionen nehmen wir ein?', o: ['A', 'B', 'C', 'D'], x: 'C: #7 ist Vorderspieler (Position 3) und geht sofort zurück in die Mitte ans Netz zum Blocken. Der Zuspieler ist Hinterspieler und geht auf seine Grundposition hinten rechts (Position 1); #14 tauscht mit ihm nach hinten links. A: Niemand geht zurück – #7 fehlt im Block und der Zuspieler bleibt am Netz. B: Der Zuspieler verteidigt hinten links statt auf seiner Grundposition hinten rechts. D: Der Zuspieler ist Hinterspieler und darf nicht blocken.' }
+      }
+    },
     { // hide6 – setter in position 6
       id: 'hide6', kind: 'spot', correct: 0,
       spots: [[5.0, 1.9], [5.0, 0.45], [8.4, 2.6], [4.6, 7.7]],
