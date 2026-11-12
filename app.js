@@ -138,7 +138,7 @@
   // ---------------------------------------------------------- Event logic
   // Members with "yes" and guests share the spots in the order they signed up
   function guestEntries(ev) {
-    return Object.entries(ev.guests || {}).flatMap(([host, arr]) => (Array.isArray(arr) ? arr : []).map((g, i) => ({ k: 'g:' + host + ':' + i, t: g.t || 0, m: false, name: g.n, trial: !!g.trial, host, i })));
+    return Object.entries(ev.guests || {}).flatMap(([host, arr]) => (Array.isArray(arr) ? arr : []).map((g, i) => ({ k: 'g:' + host + ':' + i, t: g.t || 0, m: false, name: g.n, trial: !!g.trial, s: Number(g.s) || 0, host, i })));
   }
   function rsvpLists(ev) {
     const r = ev.rsvp || {};
@@ -249,7 +249,7 @@
   }
 
   // ---------------------------------------------------------- Rendering
-  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt', 'gast', 'aufgabe-neu', 'design', 'push-prefs', 'turnier-neu', 'spiel', 'timer', 'abwesend']);
+  const FORM_ROUTES = new Set(['termin-neu', 'termin-edit', 'nachricht', 'umfrage-neu', 'video-neu', 'video-edit', 'anwesenheit', 'profil', 'beitrag-neu', 'fahrt', 'gast', 'aufgabe-neu', 'design', 'push-prefs', 'turnier-neu', 'spiel', 'timer', 'abwesend', 'quiz']);
   let lastKey = '', rq = false;
   const schedule = () => { if (rq) return; rq = true; requestAnimationFrame(() => { rq = false; render(false); }); };
   // Don't redraw while someone is typing into an inline field (comment, goal, search)
@@ -291,7 +291,7 @@
     ['news', '📣', 'tab.news', ['news', 'nachricht']],
     ['umfragen', '📊', 'tab.polls', ['umfragen', 'umfrage-neu']],
     ['videos', '🎬', 'tab.videos', ['videos', 'video-neu', 'video-edit', 'aufgabe-neu']],
-    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install', 'kalender-abo', 'push-prefs', 'ziele', 'design', 'suche', 'turniere', 'turnier', 'turnier-neu', 'spiel', 'timer', 'regeln', 'abwesend']]
+    ['mehr', '☰', 'tab.more', ['mehr', 'kasse', 'beitrag-neu', 'statistik', 'mitglieder', 'postfach', 'profil', 'install', 'kalender-abo', 'push-prefs', 'ziele', 'design', 'suche', 'turniere', 'turnier', 'turnier-neu', 'spiel', 'timer', 'regeln', 'abwesend', 'quiz']]
   ];
   const VIEWS = {
     termine: viewTermine, termin: viewTermin, 'termin-neu': viewTerminForm, 'termin-edit': viewTerminForm, anwesenheit: viewAnwesenheit, fahrt: viewFahrt,
@@ -299,7 +299,7 @@
     videos: viewVideos, 'video-neu': viewVideoForm, 'video-edit': viewVideoForm,
     mehr: viewMehr, kasse: viewKasse, 'beitrag-neu': viewBeitragForm, statistik: viewStatistik, mitglieder: viewMitglieder, postfach: viewPostfach, profil: viewProfil, install: viewInstall,
     gast: viewGast, teams: viewTeams, 'aufgabe-neu': viewAufgabeForm, 'kalender-abo': viewKalenderAbo, 'push-prefs': viewPushPrefs, ziele: viewZiele, design: viewDesign, suche: viewSuche,
-    turniere: viewTurniere, turnier: viewTurnier, 'turnier-neu': viewTurnierForm, spiel: viewSpiel, timer: viewTimer, regeln: viewRegeln, abwesend: viewAbwesend
+    turniere: viewTurniere, turnier: viewTurnier, 'turnier-neu': viewTurnierForm, spiel: viewSpiel, timer: viewTimer, regeln: viewRegeln, abwesend: viewAbwesend, quiz: viewQuiz
   };
   const curFlag = () => (I.langs.find((l) => l.code === S.lang) || I.langs[0]).flag;
   function shell(r, id) {
@@ -559,13 +559,17 @@
       <p class="muted">${esc(ev.title)} · ${esc(whenTxt(ev.start))}</p>
       <label>${t('guest.name')}<input name="name" required maxlength="40" placeholder="${t('guest.namePh')}"></label>
       <label class="check"><input type="checkbox" name="trial"> ${t('guest.trial')}</label>
+      <label>${t('gskill.q')}</label><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<label title="${t('gskill.l' + n)}"><input type="radio" name="gs" value="${n}" ${n === 3 ? 'checked' : ''}><span>★</span></label>`).join('')}</div>
+      <p class="small muted">${t('gskill.scale')}</p>
       <p class="small muted">${t('guest.hint')}</p>
       <button class="btn block">${t('guest.save')}</button></form>` : `<div class="empty">${t('ev.notFound')}</div>` };
   }
   // ---------- Teams
+  const guestKey = (name) => 'g~' + String(name || '').trim().toLowerCase().slice(0, 40);
+  const guestSkill = (g) => Number(S.skills[guestKey(g.name)]) || g.s || (g.trial ? 2 : 3);
   function playerPool(ev) {
     const l = rsvpLists(ev);
-    return l.confirmed.map((k) => ({ k, name: nameOf(k), s: Number(S.skills[k]) || 3, r: posOf(k)[0] || '' })).concat(l.guestsIn.map((g) => ({ k: g.k, name: g.name + ' (G)', s: g.trial ? 2 : 3, r: '' })));
+    return l.confirmed.map((k) => ({ k, name: nameOf(k), s: Number(S.skills[k]) || 3, r: posOf(k)[0] || '' })).concat(l.guestsIn.map((g) => ({ k: g.k, name: g.name + ' (G)', s: guestSkill(g), r: '', gk: guestKey(g.name), gs: g.s || (g.trial ? 2 : 3) })));
   }
   // Setters (and other positions) are spread first; swaps only between players of the same position
   const ROLE_ORDER = ['S', 'L', 'MB', 'OPP', 'OH', ''];
@@ -587,10 +591,11 @@
   const TEAM_COLORS = ['#1756c9', '#d64545', '#14a05a', '#c27c00'];
   function teamsHtml(teams, showSkill) {
     return `<div class="teams">${teams.map((tm, i) => {
-      const players = tm.map((p) => (typeof p === 'string' ? { k: p, name: p.startsWith('g:') ? (guestName(p) || '?') + ' (G)' : nameOf(p), s: Number(S.skills[p]) || 3 } : p));
+      const players = tm.map((p) => (typeof p === 'string' ? { k: p, name: p.startsWith('g:') ? (guestName(p) || '?') + ' (G)' : nameOf(p), s: p.startsWith('g:') ? guestSkillByKey(p) : Number(S.skills[p]) || 3 } : p));
       return `<div class="team" style="--tc:${TEAM_COLORS[i % 4]}"><b>${t('teams.team', { n: i + 1 })}${showSkill ? ` <small>★ ${players.reduce((s, p) => s + p.s, 0)}</small>` : ''}</b>${players.map((p) => `<span>${esc(p.name)}${p.k && !p.k.startsWith('g:') ? posTag(posOf(p.k)) : ''}${showSkill ? ` <small>${'★'.repeat(p.s)}</small>` : ''}</span>`).join('')}</div>`;
     }).join('')}</div>`;
   }
+  function guestSkillByKey(k) { const [, host, i] = k.split(':'); for (const e of S.events) { const g = ((e.guests || {})[host] || [])[Number(i)]; if (g) return guestSkill({ name: g.n, s: Number(g.s) || 0, trial: !!g.trial }); } return 3; }
   function guestName(k) { const [, host, i] = k.split(':'); for (const e of S.events) { const g = ((e.guests || {})[host] || [])[Number(i)]; if (g) return g.n; } return ''; }
   function viewTeams(id) {
     const ev = S.events.find((e) => e.id === id);
@@ -605,10 +610,11 @@
         <div class="row wrap-row"><button class="btn" data-a="teams-draw" data-id="${id}" data-n="${n}">🎲 ${d ? t('teams.again') : t('teams.draw')}</button>${d ? `<button class="btn ghost" data-a="teams-save" data-id="${id}">💾 ${t('teams.save')}</button>` : ''}</div>
         ${d ? teamsHtml(d.teams, true) : ''}
         <p class="small muted">${t('teams.skillHint')}</p></div>
-        <div class="card"><h3>${t('teams.skills')}</h3>${pool.filter((p) => !p.k.startsWith('g:')).map((p) => `<div class="skrow"><span>${esc(p.name)}</span>${skillSelect(p.k)}</div>`).join('') || `<p class="muted">${t('teams.noPlayers')}</p>`}</div>`
+        <div class="card"><h3>${t('teams.skills')}</h3>${pool.filter((p) => !p.k.startsWith('g:')).map((p) => `<div class="skrow"><span>${esc(p.name)}</span>${skillSelect(p.k)}</div>`).join('') || `<p class="muted">${t('teams.noPlayers')}</p>`}
+          ${pool.some((p) => p.gk) ? `<h4>${t('gskill.title')}</h4><p class="small muted">${t('gskill.hint')}</p>${pool.filter((p) => p.gk).map((p) => `<div class="skrow"><span>${esc(p.name)}</span>${skillSelect(p.gk, p.gs)}</div>`).join('')}` : ''}</div>`
     };
   }
-  const skillSelect = (k) => `<span class="skill">${[1, 2, 3, 4, 5].map((n) => `<button class="${(Number(S.skills[k]) || 3) >= n ? 'on' : ''}" data-a="skill" data-u="${k}" data-n="${n}" aria-label="${n}">★</button>`).join('')}</span>`;
+  const skillSelect = (k, def = 3) => `<span class="skill">${[1, 2, 3, 4, 5].map((n) => `<button class="${(Number(S.skills[k]) || def) >= n ? 'on' : ''}" data-a="skill" data-u="${k}" data-n="${n}" aria-label="${n}">★</button>`).join('')}</span>`;
   function carpoolCard(ev, past) {
     const rides = ev.rides || {}; const me = uid(); const mine = rides[me];
     const drivers = Object.entries(rides).filter(([, r]) => r.type === 'fahrer');
@@ -882,6 +888,7 @@
           ${item('#/turniere', '🏆', t('tour.title'), t('tour.sub'))}
           ${item('#/timer', '⏱️', t('timer.title'), t('timer.sub'))}
           ${item('#/regeln', '📖', t('rules.title'), t('rules.sub'))}
+          ${item('#/quiz', '🔄', t('quiz.title'), t('quiz.sub'))}
           ${!isStandalone() ? item('#/install', '📲', t('more.install'), t('more.installSub')) : ''}
           ${item('#/nachricht/trainer', '✉️', t('more.toCoach'), t('more.toCoachSub'))}
           ${item('#/kasse', '💶', t('more.cash'), tr ? t('more.cashCoach') : t('more.cashMember'))}
@@ -894,7 +901,7 @@
           ${item('#/design', '🎨', t('design.title'), t('design.sub'))}
         </div>` : ''}
         <div class="menu">${DB.demo ? item('#/mehr', '🔄', t('more.demoSwitch'), '', 0, 'demo-switch') + item('#/mehr', '♻️', t('demo.reset'), '', 0, 'demo-reset') : item('#/mehr', '🚪', t('logout'), '', 0, 'logout')}</div>
-        <p class="center-text small muted">${esc(C.appName || 'Volleyball')} · ${t('publisher', { name: C.publisher || '' })}<br>${t('more.version', { v: '3.0' })}</p>`
+        <p class="center-text small muted">${esc(C.appName || 'Volleyball')} · ${t('publisher', { name: C.publisher || '' })}<br>${t('more.version', { v: '3.1' })}</p>`
     };
   }
   function viewProfil() {
@@ -1040,7 +1047,7 @@
     const list = data[S.lang] || data.en || [];
     return {
       title: t('rules.title'), back: '#/mehr',
-      html: `<div class="seg"><button class="${tab === 'rules' ? 'on' : ''}" data-a="rules-tab" data-v="rules">📖 ${t('rules.rules')}</button><button class="${tab === 'signals' ? 'on' : ''}" data-a="rules-tab" data-v="signals">🙋 ${t('rules.signals')}</button></div>
+      html: `<a class="card mitem" href="#/quiz"><span class="mi">🔄</span><span class="ml"><b>${t('quiz.title')}</b><small>${t('quiz.sub')}</small></span><span class="chev">›</span></a><div class="seg"><button class="${tab === 'rules' ? 'on' : ''}" data-a="rules-tab" data-v="rules">📖 ${t('rules.rules')}</button><button class="${tab === 'signals' ? 'on' : ''}" data-a="rules-tab" data-v="signals">🙋 ${t('rules.signals')}</button></div>
         ${list.map(([ic, h, txt]) => `<div class="card rule"><span class="ri">${ic}</span><div><b>${esc(h)}</b><p class="small">${esc(txt)}</p></div></div>`).join('')}
         <p class="small muted center-text">${t('rules.source')}</p>`
     };
@@ -1346,6 +1353,156 @@
     toast(t('saved')); go('#/turnier/' + tid);
   }
 
+  // ---------------------------------------------------------- v4: 5-1 rotation quiz (court graphics + animated solution)
+  const QM = 40; // px per metre
+  const qxy = (p) => [p[0] * QM, p[1] * QM];
+  const QZ = { i: 0, score: 0, answered: false, results: [], playing: false };
+  const quizText = (q) => (q.t[S.lang] || q.t.en);
+  const qLetter = (i) => 'ABCD'[i];
+  function qToken(id, p, q, mini) {
+    const [x, y] = qxy(p); const setter = id === 'S';
+    const ghost = (q.ghost || []).includes(id) && !mini;
+    const r = mini ? 22 : 15;
+    const label = setter ? t('pos.s.S') : String(self.QUIZ.jersey[id]);
+    const slot = q.slots && q.slots[id] && !mini ? `<text class="qslot" y="${r + 12}">P${q.slots[id]}</text>` : '';
+    const optIdx = q.kind === 'player' ? (q.opts || []).indexOf(id) : -1;
+    const badge = optIdx >= 0 && !mini ? `<g class="qbadge" transform="translate(${r - 2},${-r + 2})"><circle r="9"/><text dy="3.5">${qLetter(optIdx)}</text></g>` : '';
+    const hl = (q.hl || []).includes(id) && !mini ? `<circle class="qhl" r="${r + 7}"/>` : '';
+    return `<g class="qt ${setter ? 'set' : ''} ${ghost ? 'ghost' : ''}" id="${mini ? '' : 'qt-' + id}" style="transform:translate(${x}px,${y}px)" ${optIdx >= 0 && !mini ? `data-a="quiz-ans" data-i="${optIdx}"` : ''}>
+      <ellipse class="qsh" cx="2" cy="${r * 0.55}" rx="${r * 0.95}" ry="${r * 0.45}"/>${hl}<circle class="qbody" r="${r}"/>
+      <text class="qlab" dy="${mini ? 5 : 4.5}">${ghost ? '?' : esc(label)}</text>${slot}${badge}</g>`;
+  }
+  function courtSvg(q, mini, players) {
+    const pl = players || q.pl;
+    const vb = mini ? '-30 -20 420 400' : '-60 -175 480 610';
+    const floorLines = (y0) => Array.from({ length: 24 }, (_, k) => `<line x1="${k * 15}" y1="${y0}" x2="${k * 15}" y2="${y0 + (y0 < 0 ? 170 : 360)}"/>`).join('');
+    const nums = !mini ? Object.entries({ 1: [7.5, 7], 2: [7.5, 2], 3: [4.5, 2], 4: [1.5, 2], 5: [1.5, 7], 6: [4.5, 7] }).map(([n, p]) => `<text class="qnum" x="${p[0] * QM}" y="${p[1] * QM - 22}">${n}</text>`).join('') : '';
+    const spots = q.kind === 'spot' && !mini ? q.spots.map((p, i) => { const [x, y] = qxy(p); return `<g class="qspot" id="qs-${i}" data-a="quiz-ans" data-i="${i}" transform="translate(${x},${y})"><circle r="15"/><text dy="5">${qLetter(i)}</text></g>`; }).join('') : '';
+    const opp = (q.opp || []).map((p) => { const [x, y] = qxy(p); return `<g class="qt opp" style="transform:translate(${x}px,${y}px)"><ellipse class="qsh" cx="2" cy="8" rx="14" ry="7"/><circle class="qbody" r="15"/></g>`; }).join('');
+    const ball = q.ball0 && !mini ? (() => { const [x, y] = qxy(q.ball0); return `<g id="q-ball" style="transform:translate(${x}px,${y}px)"><ellipse class="qbsh" id="q-bsh" rx="6" ry="3" cy="9"/><g id="q-bb">${QBALL}</g></g>`; })() : (!mini ? `<g id="q-ball" style="display:none"><ellipse class="qbsh" id="q-bsh" rx="6" ry="3" cy="9"/><g id="q-bb">${QBALL}</g></g>` : '');
+    return `<svg viewBox="${vb}" class="${mini ? 'qmini' : 'qcourt'}" xmlns="http://www.w3.org/2000/svg">
+      <defs><pattern id="qmesh" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M0 0L6 6M6 0L0 6" stroke="#20242c" stroke-width=".7" opacity=".55"/></pattern>
+        <linearGradient id="qfloor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e98c45"/><stop offset="1" stop-color="#d9712e"/></linearGradient>
+        <linearGradient id="qfree" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2d6cb5"/><stop offset="1" stop-color="#1f4f8c"/></linearGradient>
+        ${['w', 'y', 'g', 'r'].map((c) => `<marker id="qar-${c}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="qam-${c}"/></marker>`).join('')}</defs>
+      <rect x="-60" y="-175" width="480" height="625" fill="url(#qfree)"/>
+      <rect x="0" y="${mini ? -20 : -170}" width="360" height="${mini ? 20 : 170}" fill="url(#qfloor)" opacity=".8"/>
+      <rect x="0" y="0" width="360" height="360" fill="url(#qfloor)"/>
+      <g class="qwood">${floorLines(0)}${mini ? '' : floorLines(-170)}</g>
+      <g class="qlines"><rect x="0" y="0" width="360" height="360"/><line x1="0" y1="120" x2="360" y2="120"/>${mini ? '' : '<line x1="0" y1="-120" x2="360" y2="-120"/><line x1="0" y1="-170" x2="0" y2="0"/><line x1="360" y1="-170" x2="360" y2="0"/>'}</g>
+      <g id="q-nums" class="${q.sol && q.sol.some((s) => s.nums) ? 'hide' : ''}">${mini ? '' : nums}</g>
+      ${mini ? '<rect x="-14" y="-6" width="388" height="6" class="qnetmini"/>' : `<g class="qnet"><rect x="-14" y="-2" width="388" height="5" class="qnetshadow"/><rect x="-12" y="-38" width="384" height="38" fill="url(#qmesh)"/><rect x="-12" y="-40" width="384" height="6" class="qband"/><rect x="-12" y="-4" width="384" height="3" class="qband2"/>
+        <g class="qant"><rect x="-3" y="-62" width="5" height="62"/><rect x="358" y="-62" width="5" height="62"/></g><rect x="-22" y="-44" width="9" height="46" class="qpost"/><rect x="373" y="-44" width="9" height="46" class="qpost"/></g>`}
+      ${spots}<g id="q-ar"></g>${opp}
+      ${Object.entries(pl).map(([id, p]) => qToken(id, p, q, mini)).join('')}
+      ${ball}<g id="q-ov"></g></svg>`;
+  }
+  const QBALL = '<circle r="7" fill="#fff6d8" stroke="#1f3c88" stroke-width="1.2"/><path d="M-7 0Q0 -4 7 0M-3.5 -6Q-1 0 -3.5 6M3.5 -6Q6 0 3.5 6" fill="none" stroke="#1f3c88" stroke-width="1.1"/>';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function qArrow(from, to, color) {
+    const g = $('#q-ar'); if (!g) return;
+    const [x1, y1] = qxy(from), [x2, y2] = qxy(to);
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy); if (len < 8) return;
+    const sh = 18 / len; const sx = x1 + dx * sh, sy = y1 + dy * sh, ex = x2 - dx * sh, ey = y2 - dy * sh;
+    const cx = (sx + ex) / 2 - dy * 0.12, cy = (sy + ey) / 2 + dx * 0.12;
+    g.insertAdjacentHTML('beforeend', `<path class="qarrow c-${color}" d="M${sx} ${sy}Q${cx} ${cy} ${ex} ${ey}" pathLength="100" marker-end="url(#qar-${color})"/>`);
+  }
+  function qBallFly(from, to, h, ms) {
+    const ball = $('#q-ball'); const bb = $('#q-bb'); const sh = $('#q-bsh'); if (!ball) return Promise.resolve();
+    ball.style.display = '';
+    const [x1, y1] = qxy(from), [x2, y2] = qxy(to); const H = (h || 2.5) * QM * 0.55;
+    return new Promise((res) => {
+      const t0 = performance.now();
+      const step = (now) => {
+        const k = Math.min(1, (now - t0) / ms); const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        const x = x1 + (x2 - x1) * e, y = y1 + (y2 - y1) * e; const lift = Math.sin(Math.PI * e) * H;
+        ball.style.transform = `translate(${x}px,${y}px)`;
+        bb.setAttribute('transform', `translate(0,${-lift}) scale(${1 + lift / H * 0.45})`);
+        sh.setAttribute('opacity', String(0.45 - lift / H * 0.25));
+        if (k < 1 && document.body.contains(ball)) requestAnimationFrame(step); else res();
+      };
+      requestAnimationFrame(step);
+    });
+  }
+  function qMark(p, ok) {
+    const [x, y] = qxy(p); const o = $('#q-ov'); if (!o) return;
+    o.insertAdjacentHTML('beforeend', ok ? `<g class="qmark ok" transform="translate(${x},${y - 30})"><circle r="11"/><path d="M-5 0l3.5 4L5 -4"/></g>` : `<g class="qmark bad" transform="translate(${x},${y})"><circle r="12"/><path d="M-5 -5L5 5M5 -5L-5 5"/></g>`);
+  }
+  async function quizPlay(q) {
+    if (QZ.playing) return; QZ.playing = true;
+    const pos = { ...q.pl };
+    const setT = (id, p) => { const el = $('#qt-' + id); if (el) { el.style.transform = `translate(${p[0] * QM}px,${p[1] * QM}px)`; el.classList.remove('ghost'); const l = el.querySelector('.qlab'); if (l && l.textContent === '?') l.textContent = t('pos.s.S'); } };
+    try {
+      for (const st of q.sol) {
+        if (!$('#q-ar')) break;
+        const cap = $('#q-cap'); if (cap) cap.textContent = st.label ? t('quiz.' + st.label) : '';
+        if (st.nums) { const n = $('#q-nums'); if (n) { n.classList.remove('hide'); n.classList.add('reveal'); } }
+        document.querySelectorAll('#q-ar .qarrow').forEach((a) => a.classList.add('old'));
+        if (st.bad) st.bad.forEach((id) => { const el = $('#qt-' + id); if (el) el.classList.add('wrong'); qMark([(pos[st.bad[0]][0] + pos[st.bad[1]][0]) / 2, (pos[st.bad[0]][1] + pos[st.bad[1]][1]) / 2], false); });
+        const jobs = [];
+        if (st.moves) Object.entries(st.moves).forEach(([id, p]) => { qArrow(pos[id], p, id === 'S' ? 'y' : 'w'); pos[id] = p; setT(id, p); });
+        if (st.ball) jobs.push(qBallFly(st.ball[0], st.ball[1], st.h, 900));
+        if (st.ballX) { qArrow(st.ballX[0], st.ballX[1], 'r'); qMark(st.ballX[1], false); }
+        if (st.moves) jobs.push(sleep(1000));
+        await Promise.all(jobs); await sleep(450);
+        if (st.bad) st.bad.forEach((id) => { const el = $('#qt-' + id); if (el) el.classList.remove('wrong'); });
+      }
+      const cap = $('#q-cap'); if (cap) cap.textContent = '';
+    } finally { QZ.playing = false; }
+  }
+  function viewQuiz() {
+    const QS = self.QUIZ ? self.QUIZ.questions : [];
+    if (!QS.length) return { title: t('quiz.title'), back: '#/mehr', html: `<div class="empty">–</div>` };
+    if (QZ.i >= QS.length) {
+      const best = Math.max(Number(store.get('vb-quiz-best')) || 0, QZ.score); store.set('vb-quiz-best', String(best));
+      const pct = Math.round((QZ.score / QS.length) * 100);
+      return {
+        title: t('quiz.title'), back: '#/mehr',
+        html: `<div class="card center-text qend"><div class="qend-ic">${pct >= 85 ? '🏆' : pct >= 60 ? '💪' : '📚'}</div><h2>${t('quiz.result', { n: QZ.score, total: QS.length })}</h2>
+          <p class="muted">${t(pct >= 85 ? 'quiz.r3' : pct >= 60 ? 'quiz.r2' : 'quiz.r1')}</p><p class="small muted">${t('quiz.best', { n: best, total: QS.length })}</p>
+          <div class="qdots">${QZ.results.map((r) => `<span class="${r ? 'ok' : 'bad'}"></span>`).join('')}</div>
+          <button class="btn block" data-a="quiz-restart">🔄 ${t('quiz.again')}</button></div>`
+      };
+    }
+    const q = QS[QZ.i]; const tx = quizText(q);
+    const legend = `<div class="qlegend"><span><i class="lg set"></i>${t('quiz.lgSetter')}</span><span><i class="lg tm"></i>${t('quiz.lgTeam')}</span>${q.opp ? `<span><i class="lg op"></i>${t('quiz.lgOpp')}</span>` : ''}<span>🏐 ${t('quiz.lgBall')}</span></div>`;
+    const opts = q.kind === 'formation'
+      ? `<div class="qforms">${q.forms.map((f, i) => `<button class="qopt qform" data-a="quiz-ans" data-i="${i}"><b>${qLetter(i)}</b>${courtSvg(q, true, f)}</button>`).join('')}</div>`
+      : `<div class="qopts">${tx.o.map((o, i) => `<button class="qopt" data-a="quiz-ans" data-i="${i}">${q.kind === 'spot' ? '' : `<b>${qLetter(i)}</b>`}<span>${esc(o)}</span></button>`).join('')}</div>`;
+    return {
+      title: t('quiz.title'), back: '#/mehr',
+      html: `<form data-f="quiz" class="quizf">
+        ${QZ.i === 0 && !QZ.answered ? `<div class="card qintro"><b>🔄 ${t('quiz.introT')}</b><p class="small">${t('quiz.intro')}</p></div>` : ''}
+        <div class="qhead"><span>${t('quiz.qn', { n: QZ.i + 1, total: QS.length })}</span><span class="qdots">${QS.map((_, k) => `<span class="${k < QZ.results.length ? (QZ.results[k] ? 'ok' : 'bad') : k === QZ.i ? 'cur' : ''}"></span>`).join('')}</span><span>⭐ ${QZ.score}</span></div>
+        <div class="card qcard"><h3 class="qq">${esc(tx.q)}</h3>
+          <div class="qcourt-wrap"><div class="qtilt">${courtSvg(q, false)}</div><div class="qcap" id="q-cap"></div></div>${legend}</div>
+        ${opts}
+        <div id="q-res"></div></form>`
+    };
+  }
+  async function quizAnswer(i) {
+    if (QZ.answered) return;
+    const QS = self.QUIZ.questions; const q = QS[QZ.i]; const ok = i === q.correct; const tx = quizText(q);
+    QZ.answered = true; QZ.results.push(ok); if (ok) QZ.score++;
+    document.querySelectorAll('.qopt').forEach((b) => { const k = Number(b.dataset.i); b.disabled = true; b.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
+    if (q.kind === 'spot') q.spots.forEach((_, k) => { const s = $('#qs-' + k); if (s) s.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
+    if (q.kind === 'player') q.opts.forEach((id, k) => { const el = $('#qt-' + id); if (el) el.classList.add(k === q.correct ? 'right' : k === i ? 'wrong' : 'dim'); });
+    buzz(ok ? 40 : [60, 60, 60]);
+    const res = $('#q-res');
+    if (res) res.innerHTML = `<div class="card qexp ${ok ? 'ok' : 'bad'}"><b>${ok ? '✅ ' + t('quiz.right') : '❌ ' + t('quiz.wrong', { a: qLetter(q.correct) })}</b><p>${esc(tx.x)}</p>
+      <div class="row"><button type="button" class="btn ghost" data-a="quiz-replay">▶ ${t('quiz.replay')}</button><button type="button" class="btn" data-a="quiz-next">${QZ.i + 1 < QS.length ? t('quiz.next') + ' →' : t('quiz.finish')}</button></div></div>`;
+    const wrap = $('.qcourt-wrap'); if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await quizPlay(q);
+  }
+  function quizReplay() {
+    if (QZ.playing) return;
+    const q = self.QUIZ.questions[QZ.i]; const box = $('.qtilt'); if (!box) return;
+    box.innerHTML = courtSvg(q, false);
+    if (q.kind === 'spot') q.spots.forEach((_, k) => { const s = $('#qs-' + k); if (s) s.classList.add(k === q.correct ? 'right' : 'dim'); });
+    if (q.kind === 'player') q.opts.forEach((id, k) => { const el = $('#qt-' + id); if (el) el.classList.add(k === q.correct ? 'right' : 'dim'); });
+    setTimeout(() => quizPlay(q), 250);
+  }
+
   // ---------- Unread badges
   function badges() {
     const now = Date.now();
@@ -1575,6 +1732,10 @@
     },
     fav: (el) => { const v = S.videos.find((x) => x.id === el.dataset.id); if (!v) return; return DB.update('videos/' + v.id, { ['fav.' + uid()]: v.fav && v.fav[uid()] ? DEL : true }); },
     'away-del': (el) => confirmDo(t('away.deleteQ'), async () => { const list = awayOf(S.me).filter((_, i) => i !== Number(el.dataset.i)); await DB.update('members/' + uid(), { away: list }); render(true); }),
+    'quiz-ans': (el) => quizAnswer(Number(el.dataset.i)),
+    'quiz-next': () => { QZ.i++; QZ.answered = false; render(true); window.scrollTo(0, 0); },
+    'quiz-replay': () => quizReplay(),
+    'quiz-restart': () => { Object.assign(QZ, { i: 0, score: 0, answered: false, results: [] }); render(true); window.scrollTo(0, 0); },
     'rules-tab': (el) => { S.rulesTab = el.dataset.v; render(true); },
     'tour-tab': (el) => { S.tourTab = el.dataset.v; render(true); },
     'tour-del': (el) => confirmDo(t('tour.deleteQ'), async () => { await DB.remove('tournaments/' + el.dataset.id); go('#/turniere'); }),
@@ -1602,6 +1763,7 @@
 
   const FORMS = {
     // ----- v3 forms
+    async quiz() { /* answers are buttons */ },
     async away(f) {
       const e = f.elements; const fr = dayStart(e.f.value); const to = dayEnd(e.t.value);
       if (!(to >= fr)) throw new Error(t('away.badRange'));
@@ -1735,7 +1897,7 @@
     },
     async guest(f) {
       const ev = S.events.find((e) => e.id === f.dataset.id); if (!ev) return;
-      const arr = [...((ev.guests || {})[uid()] || []), { n: f.elements.name.value.trim(), t: Date.now(), trial: f.elements.trial.checked }];
+      const arr = [...((ev.guests || {})[uid()] || []), { n: f.elements.name.value.trim(), t: Date.now(), trial: f.elements.trial.checked, s: Number((f.querySelector('input[name=gs]:checked') || {}).value) || 3 }];
       await DB.update('events/' + ev.id, { ['guests.' + uid()]: arr });
       toast(t('guest.saved')); go('#/termin/' + ev.id);
     },

@@ -242,6 +242,46 @@ details.reads{margin-top:8px;font-size:.9rem}details.reads summary{color:var(--m
 .champ{display:flex;gap:14px;align-items:center;font-size:40px;background:linear-gradient(135deg,#7a5200,#ffb703);color:#fff}.champ small{display:block;font-size:.8rem;opacity:.9}.champ b{font-size:1.3rem}
 .setgrid{display:grid;grid-template-columns:auto 1fr 1fr;gap:8px;align-items:center;margin:8px 0}.setgrid b{text-align:center;font-size:.9rem}.setgrid input{text-align:center;font-size:1.2rem}
 .mrow.past{opacity:.55}
+/* ---------- v4 quiz */
+.qintro{background:linear-gradient(135deg,#eef4ff,#fff)}
+.qhead{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:.85rem;color:var(--muted);margin:2px 4px 8px}
+.qdots{display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center}.qdots span{width:9px;height:9px;border-radius:50%;background:#d6dbe6}.qdots .ok{background:var(--ok)}.qdots .bad{background:#d64545}.qdots .cur{background:var(--blue);box-shadow:0 0 0 3px var(--sky)}
+.qcard{padding:12px 10px}.qq{margin:2px 4px 10px;font-size:1.05rem;line-height:1.35}
+.qcourt-wrap{position:relative;perspective:1100px;margin:0 -4px;overflow:hidden;border-radius:14px;background:#1f4f8c}
+.qtilt{transform:rotateX(22deg) scale(1.06);transform-origin:50% 62%}
+.qcourt{display:block;width:100%;height:auto}
+.qcap{position:absolute;left:10px;top:10px;background:rgba(10,20,40,.72);color:#fff;font-weight:700;font-size:.8rem;border-radius:999px;padding:4px 10px}.qcap:empty{display:none}
+.qwood line{stroke:#000;stroke-opacity:.05;stroke-width:1}
+.qlines rect,.qlines line{fill:none;stroke:#fff;stroke-width:3}
+.qnum{font:800 40px system-ui,sans-serif;fill:#fff;opacity:.16;text-anchor:middle;transition:opacity .5s}#q-nums.hide .qnum{opacity:0}
+.qband{fill:#f4f6fa}.qband2{fill:#e6e9ef;opacity:.8}.qnetshadow{fill:#000;opacity:.18}.qpost{fill:#c9ced8;stroke:#7d8594}
+.qant rect{fill:#fff;stroke:#d23;stroke-width:2;stroke-dasharray:7 7}.qnetmini{fill:#20242c}
+.qt{transition:transform .95s cubic-bezier(.45,.05,.25,1)}
+.qt .qbody{fill:#1c3f8f;stroke:#fff;stroke-width:2.5}.qt.set .qbody{fill:#ffc531;stroke:#5a3d00}.qt.opp .qbody{fill:#d64545;stroke:#fff}
+.qt .qsh,.qbsh{fill:#000;opacity:.28}
+.qlab{font:800 13px system-ui,sans-serif;fill:#fff;text-anchor:middle;pointer-events:none}.qt.set .qlab{fill:#3a2700}
+.qslot{font:700 10px system-ui,sans-serif;fill:#fff;text-anchor:middle;paint-order:stroke;stroke:#00000088;stroke-width:3}
+.qmini .qlab{font-size:18px}.qform b{flex:0 0 auto;width:26px}#q-nums.reveal .qnum{opacity:.75}.qarrow.old{opacity:.35}
+.qt.ghost .qbody{fill:rgba(255,197,49,.25);stroke:#ffc531;stroke-dasharray:4 3}.qt.ghost .qlab{fill:#ffc531}
+.qhl{fill:none;stroke:#fff;stroke-width:3;animation:qpulse 1.2s ease-in-out infinite}
+@keyframes qpulse{50%{stroke-opacity:.2;r:28px}}
+.qbadge circle{fill:#fff;stroke:#1756c9;stroke-width:2}.qbadge text{font:800 11px system-ui;fill:#1756c9;text-anchor:middle}
+.qt[data-a]{cursor:pointer}.qt.right .qbody{stroke:#14d36f;stroke-width:5}.qt.wrong .qbody{stroke:#ff4d4d;stroke-width:5}.qt.dim{opacity:.85}
+.qspot{cursor:pointer}.qspot circle{fill:rgba(255,255,255,.22);stroke:#fff;stroke-width:2.5;stroke-dasharray:5 4;transition:.2s}.qspot text{font:800 15px system-ui;fill:#fff;text-anchor:middle;pointer-events:none}
+.qspot:hover circle{fill:rgba(255,255,255,.45)}.qspot.right circle{fill:#14a05a;stroke:#fff;stroke-dasharray:none}.qspot.wrong circle{fill:#d64545;stroke:#fff;stroke-dasharray:none}.qspot.dim{opacity:.35}
+.qarrow{fill:none;stroke-width:4;stroke-linecap:round;stroke-dasharray:100;stroke-dashoffset:100;animation:qdraw .9s ease-out forwards}
+.qarrow.c-w{stroke:#fff}.qarrow.c-y{stroke:#ffc531}.qarrow.c-g{stroke:#14d36f}.qarrow.c-r{stroke:#ff4d4d;stroke-dasharray:6 5;animation:none;stroke-dashoffset:0}
+.qam-w{fill:#fff}.qam-y{fill:#ffc531}.qam-g{fill:#14d36f}.qam-r{fill:#ff4d4d}
+@keyframes qdraw{to{stroke-dashoffset:0}}
+.qmark circle{stroke:#fff;stroke-width:2.5}.qmark path{fill:none;stroke:#fff;stroke-width:3;stroke-linecap:round}.qmark.bad circle{fill:#d64545}.qmark.ok circle{fill:#14a05a}
+.qmark{animation:qpop .35s ease-out}@keyframes qpop{from{transform:scale(0)}}
+.qlegend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:.75rem;color:var(--muted);margin:8px 4px 0}.lg{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}.lg.set{background:#ffc531}.lg.tm{background:#1c3f8f}.lg.op{background:#d64545}
+.qopts{display:grid;gap:8px;margin:10px 0}.qopt{display:flex;gap:10px;align-items:center;text-align:left;width:100%;border:2px solid var(--line);background:#fff;border-radius:14px;padding:12px 14px;font:inherit;color:var(--ink);cursor:pointer;transition:.15s}
+.qopt b{flex:0 0 26px;height:26px;border-radius:50%;background:var(--sky);color:var(--blue);display:grid;place-items:center;font-size:.85rem}
+.qopt:hover:not(:disabled){border-color:var(--blue)}.qopt.right{border-color:#14a05a;background:#eafaf1}.qopt.wrong{border-color:#d64545;background:#fdeeee}.qopt.dim{opacity:.5}.qopt:disabled{cursor:default}
+.qforms{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.qform{flex-direction:column;padding:8px}.qmini{width:100%;height:auto;border-radius:8px;display:block}
+.qexp.ok{border-left:5px solid #14a05a}.qexp.bad{border-left:5px solid #d64545}.qexp p{margin:6px 0 10px}.qexp .row .btn{flex:1}
+.qend-ic{font-size:56px}.qend .qdots{margin:10px 0 16px}
 </style>
 </head>
 <body>
@@ -250,6 +290,7 @@ details.reads{margin-top:8px;font-size:.9rem}details.reads summary{color:var(--m
 <script src="config.js"></script>
 <script src="i18n.js"></script>
 <script src="content.js"></script>
+<script src="quiz.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>

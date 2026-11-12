@@ -673,6 +673,42 @@
   };
   for (const l of Object.keys(ui3)) { Object.assign(ui[l], ui3[l]); Object.assign(push[l], push3[l]); }
 
+  // ---------------------------------------------------------- Version 3.1
+  const ui4 = {
+    en: {
+      'quiz.title': 'Rotation quiz (5-1)', 'quiz.sub': 'Setter, rotation & serve receive – with animations',
+      'quiz.introT': 'Our 5-1 system', 'quiz.intro': 'Only the setter (yellow) has a fixed role. Everyone else (blue) follows the rotation and positions themselves so that the setter can always take the second ball. Answer, then watch the solution on the court.',
+      'quiz.qn': 'Question {n}/{total}', 'quiz.lgSetter': 'Setter', 'quiz.lgTeam': 'Teammates', 'quiz.lgOpp': 'Opponent', 'quiz.lgBall': 'Ball',
+      'quiz.right': 'Correct!', 'quiz.wrong': 'Not quite – the right answer is {a}.', 'quiz.replay': 'Replay', 'quiz.next': 'Next', 'quiz.finish': 'Show result',
+      'quiz.result': '{n} of {total} correct', 'quiz.r1': 'Good start – play it again and watch the animations closely.', 'quiz.r2': 'Well done! A few details are still missing.', 'quiz.r3': 'Excellent – you know the 5-1 rotation!',
+      'quiz.best': 'Your best result: {n}/{total}', 'quiz.again': 'Play again', 'quiz.afterServe': 'After the serve',
+      'gskill.title': '★ Guests', 'gskill.hint': 'Your rating is remembered by name for the next time this guest comes.', 'gskill.q': 'How strong is your guest?', 'gskill.scale': '1 = beginner · 3 = average · 5 = very strong. Only coaches see this – it helps to draw fair teams.',
+      'gskill.l1': 'Beginner', 'gskill.l2': 'Below average', 'gskill.l3': 'Average', 'gskill.l4': 'Good', 'gskill.l5': 'Very strong'
+    },
+    ru: {
+      'quiz.title': 'Квиз: расстановка 5-1', 'quiz.sub': 'Связующий, переходы и приём – с анимацией',
+      'quiz.introT': 'Наша система 5-1', 'quiz.intro': 'Фиксированная роль только у связующего (жёлтый). Все остальные (синие) следуют переходу и становятся так, чтобы связующий всегда мог сыграть второй мяч. Ответьте – и посмотрите решение на площадке.',
+      'quiz.qn': 'Вопрос {n}/{total}', 'quiz.lgSetter': 'Связующий', 'quiz.lgTeam': 'Игроки', 'quiz.lgOpp': 'Соперник', 'quiz.lgBall': 'Мяч',
+      'quiz.right': 'Верно!', 'quiz.wrong': 'Не совсем – правильный ответ {a}.', 'quiz.replay': 'Повторить', 'quiz.next': 'Дальше', 'quiz.finish': 'Результат',
+      'quiz.result': '{n} из {total} правильно', 'quiz.r1': 'Хорошее начало – пройдите ещё раз и внимательно смотрите анимацию.', 'quiz.r2': 'Отлично! Осталось разобраться в паре деталей.', 'quiz.r3': 'Превосходно – вы знаете расстановку 5-1!',
+      'quiz.best': 'Ваш лучший результат: {n}/{total}', 'quiz.again': 'Ещё раз', 'quiz.afterServe': 'После подачи',
+      'gskill.title': '★ Гости', 'gskill.hint': 'Оценка запоминается по имени для следующего визита гостя.', 'gskill.q': 'Насколько сильно играет ваш гость?', 'gskill.scale': '1 = новичок · 3 = средне · 5 = очень сильно. Видят только тренеры – это помогает честно делить команды.',
+      'gskill.l1': 'Новичок', 'gskill.l2': 'Ниже среднего', 'gskill.l3': 'Средне', 'gskill.l4': 'Хорошо', 'gskill.l5': 'Очень сильно'
+    },
+    de: {
+      'quiz.title': 'Rotations-Quiz (5-1)', 'quiz.sub': 'Zuspieler, Rotation & Annahme – mit Animationen',
+      'quiz.introT': 'Unser 5-1-System', 'quiz.intro': 'Nur der Zuspieler (gelb) hat eine feste Rolle. Alle anderen (blau) folgen der Rotation und stellen sich so auf, dass der Zuspieler immer den zweiten Ball spielen kann. Antworte und sieh dir danach die Lösung auf dem Feld an.',
+      'quiz.qn': 'Frage {n}/{total}', 'quiz.lgSetter': 'Zuspieler', 'quiz.lgTeam': 'Mitspieler', 'quiz.lgOpp': 'Gegner', 'quiz.lgBall': 'Ball',
+      'quiz.right': 'Richtig!', 'quiz.wrong': 'Nicht ganz – richtig ist {a}.', 'quiz.replay': 'Nochmal ansehen', 'quiz.next': 'Weiter', 'quiz.finish': 'Ergebnis anzeigen',
+      'quiz.result': '{n} von {total} richtig', 'quiz.r1': 'Guter Anfang – spiel es nochmal und achte genau auf die Animationen.', 'quiz.r2': 'Gut gemacht! Ein paar Details fehlen noch.', 'quiz.r3': 'Hervorragend – du kennst die 5-1-Rotation!',
+      'quiz.best': 'Dein bestes Ergebnis: {n}/{total}', 'quiz.again': 'Nochmal spielen', 'quiz.afterServe': 'Nach dem Aufschlag',
+      'gskill.title': '★ Gäste', 'gskill.hint': 'Deine Bewertung wird für das nächste Mal über den Namen gemerkt.', 'gskill.q': 'Wie stark ist dein Gast?', 'gskill.scale': '1 = Anfänger · 3 = Durchschnitt · 5 = sehr stark. Nur Trainer sehen das – es hilft beim fairen Auslosen der Teams.',
+      'gskill.l1': 'Anfänger', 'gskill.l2': 'Unter Durchschnitt', 'gskill.l3': 'Durchschnitt', 'gskill.l4': 'Gut', 'gskill.l5': 'Sehr stark'
+    }
+  };
+  for (const l of Object.keys(ui4)) Object.assign(ui[l], ui4[l]);
+
+
 
   const langs = [
     { code: 'en', name: 'English', flag: '🇬🇧' },
